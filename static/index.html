@@ -6,29 +6,34 @@
 <title>MiniLang Compiler Explorer</title>
 <style>
   :root {
-    --bg: #0d0f13;
-    --panel: #14171d;
-    --panel-2: #1a1e26;
-    --panel-3: #222833;
-    --border: #262c37;
-    --text: #e3e6eb;
-    --muted: #8b94a3;
-    --faint: #586171;
-    --accent: #7aa2ff;
-    --accent-soft: rgba(122, 162, 255, .14);
-    --green: #4ade80;
-    --red: #f87171;
-    --red-soft: rgba(248, 113, 113, .13);
-    --amber: #fbbf24;
-    --violet: #c4a1ff;
-    --cyan: #67e8f9;
-    --pink: #f9a8d4;
+    /* pink · white · blue */
+    --bg: #fdf4f9;
+    --panel: #ffffff;
+    --panel-2: #fcf5fa;
+    --panel-3: #f3e7f1;
+    --border: #eedbe8;
+    --editor-bg: #fffdfe;
+    --text: #1d2147;
+    --muted: #686d92;
+    --faint: #a6aac6;
+    --punct: #7d84a8;
+    --edge: #c9cde3;
+    --accent: #2f6fed;
+    --accent-soft: rgba(47, 111, 237, .09);
+    --pink: #e0457b;
+    --pink-soft: rgba(224, 69, 123, .09);
+    --green: #138a55;
+    --red: #d62650;
+    --red-soft: rgba(214, 38, 80, .08);
+    --amber: #b86e00;
+    --violet: #8a3fd1;
+    --cyan: #0e7fa8;
     --mono: "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace;
     --sans: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
     --fs: 14px;
     --lh: 21px;
     --pad: 14px;
-    color-scheme: dark;
+    color-scheme: light;
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
@@ -45,39 +50,51 @@
 
   /* ---------- top bar ---------- */
   .topbar {
-    display: flex; align-items: center; justify-content: space-between; gap: 16px;
-    padding: 10px 18px; border-bottom: 1px solid var(--border); background: var(--panel);
-    flex-wrap: wrap;
+    position: relative; display: flex; justify-content: center; text-align: center;
+    padding: 18px 18px 16px; background: linear-gradient(180deg, #ffffff 0%, #fdeef6 100%);
   }
-  .brand { display: flex; align-items: center; gap: 12px; }
+  .topbar::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
+    background: linear-gradient(90deg, var(--pink), #ffffff 50%, var(--accent));
+  }
+  .brand { display: flex; align-items: center; justify-content: center; gap: 16px; flex-wrap: wrap; }
   .logo {
-    width: 36px; height: 36px; border-radius: 9px; display: grid; place-items: center;
-    background: linear-gradient(135deg, #7aa2ff, #c4a1ff); color: #0d0f13;
-    font: 700 15px var(--mono); letter-spacing: -.5px;
+    width: 54px; height: 54px; border-radius: 15px; display: grid; place-items: center;
+    background: linear-gradient(135deg, var(--pink), var(--accent)); color: #fff;
+    font: 700 21px var(--mono); letter-spacing: -.5px;
+    box-shadow: 0 6px 18px rgba(224, 69, 123, .28);
   }
-  .brand h1 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: .2px; }
-  .brand p { margin: 0; font-size: 12px; color: var(--muted); }
-  .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .brand h1 {
+    margin: 0; font-size: clamp(28px, 4.2vw, 42px); font-weight: 800; letter-spacing: -.6px; line-height: 1.1;
+    background: linear-gradient(90deg, var(--pink), var(--accent));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .brand p { margin: 5px 0 0; font-size: 13.5px; color: var(--muted); }
+  .controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .controls select { max-width: 200px; }
   select, .btn {
     background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
     padding: 7px 12px; cursor: pointer; font-size: 13px;
   }
-  select:hover, .btn:hover { border-color: #3a4352; }
-  .btn.primary { background: var(--accent); color: #0b0d12; border-color: transparent; font-weight: 600; }
+  select:hover, .btn:hover { border-color: var(--pink); }
+  .btn.primary {
+    background: linear-gradient(90deg, var(--pink), var(--accent)); color: #fff;
+    border-color: transparent; font-weight: 600; box-shadow: 0 3px 10px rgba(47, 111, 237, .2);
+  }
   .btn.primary:hover { filter: brightness(1.08); }
   .btn.small { padding: 4px 10px; font-size: 12px; border-radius: 6px; }
   kbd {
     font-size: 11px; padding: 1px 5px; border-radius: 4px; margin-left: 6px;
-    background: rgba(0,0,0,.18); border: 1px solid rgba(0,0,0,.2);
+    background: rgba(255,255,255,.22); border: 1px solid rgba(255,255,255,.4);
   }
   .toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; user-select: none; }
   .toggle input { accent-color: var(--accent); }
 
   .banner {
-    margin: 0; padding: 10px 18px; background: var(--red-soft); color: #fecaca;
-    border-bottom: 1px solid rgba(248,113,113,.35); font-size: 13px;
+    margin: 0; padding: 10px 18px; background: var(--red-soft); color: var(--red);
+    border-bottom: 1px solid rgba(214,38,80,.25); font-size: 13px;
   }
-  .banner code { background: rgba(0,0,0,.3); padding: 1px 6px; border-radius: 4px; }
+  .banner code { background: rgba(214,38,80,.1); padding: 1px 6px; border-radius: 4px; }
 
   /* ---------- layout ---------- */
   .layout {
@@ -87,23 +104,25 @@
   .pane {
     background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
     display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+    box-shadow: 0 4px 22px rgba(47, 111, 237, .06), 0 1px 3px rgba(224, 69, 123, .05);
   }
   .pane-head {
-    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
     padding: 8px 14px; border-bottom: 1px solid var(--border); background: var(--panel-2);
     font-size: 13px;
   }
   .file { font-family: var(--mono); color: var(--muted); display: flex; align-items: center; gap: 8px; }
-  .file::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+  .file::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--pink); }
+  .file-wrap { display: flex; align-items: center; gap: 10px; }
   .pill {
     font-size: 12px; padding: 3px 10px; border-radius: 999px; font-weight: 600;
     background: var(--panel-3); color: var(--muted);
   }
-  .pill.ok { background: rgba(74,222,128,.13); color: var(--green); }
+  .pill.ok { background: rgba(19,138,85,.1); color: var(--green); }
   .pill.err { background: var(--red-soft); color: var(--red); }
 
   /* ---------- editor ---------- */
-  .editor { flex: 1; min-height: 0; display: flex; position: relative; background: #101318; }
+  .editor { flex: 1; min-height: 0; display: flex; position: relative; background: var(--editor-bg); }
   .gutter {
     width: 52px; flex: none; overflow: hidden; border-right: 1px solid var(--border);
     font: var(--fs)/var(--lh) var(--mono); color: var(--faint); text-align: right; user-select: none;
@@ -124,16 +143,16 @@
   .code pre { overflow: hidden; pointer-events: none; color: var(--text); }
   .code pre code { display: block; font: inherit; will-change: transform; }
   .code textarea {
-    background: transparent; color: transparent; caret-color: #fff; resize: none; outline: none;
+    background: transparent; color: transparent; caret-color: var(--pink); resize: none; outline: none;
     overflow: auto;
   }
-  .code textarea::selection { background: rgba(122,162,255,.3); color: transparent; }
-  .t-kw { color: var(--violet); }
-  .t-lit { color: var(--amber); }
-  .t-num { color: var(--amber); }
-  .t-id { color: #e3e6eb; }
-  .t-op { color: var(--cyan); }
-  .t-punct { color: #9aa4b5; }
+  .code textarea::selection { background: rgba(47,111,237,.2); color: transparent; }
+  .t-kw { color: var(--pink); font-weight: 600; }
+  .t-lit { color: var(--accent); font-weight: 600; }
+  .t-num { color: var(--accent); }
+  .t-id { color: var(--text); }
+  .t-op { color: var(--violet); }
+  .t-punct { color: var(--punct); }
   .t-com { color: var(--faint); font-style: italic; }
   .t-bad { color: var(--red); }
   .err-mark {
@@ -159,13 +178,13 @@
     display: flex; align-items: center; gap: 7px;
   }
   .tabs button:hover { color: var(--text); }
-  .tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+  .tabs button.active { color: var(--pink); border-bottom-color: var(--pink); }
   .badge {
     font: 600 11px var(--mono); padding: 1px 7px; border-radius: 999px;
     background: var(--panel-3); color: var(--muted);
   }
-  .badge.err { background: var(--red); color: #1a0b0b; }
-  .badge.ok { background: rgba(74,222,128,.15); color: var(--green); }
+  .badge.err { background: var(--red); color: #fff; }
+  .badge.ok { background: rgba(19,138,85,.12); color: var(--green); }
   .tab-body { flex: 1; min-height: 0; overflow: auto; }
   .tab { padding: 14px 16px 22px; }
   .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
@@ -195,23 +214,23 @@
     letter-spacing: .6px; padding: 8px 12px; background: var(--panel-2); position: sticky; top: 0;
     border-bottom: 1px solid var(--border);
   }
-  td { padding: 6px 12px; border-bottom: 1px solid #1d222b; font-family: var(--mono); }
+  td { padding: 6px 12px; border-bottom: 1px solid var(--border); font-family: var(--mono); }
   tbody tr { cursor: pointer; }
-  tbody tr:hover { background: var(--accent-soft); }
+  tbody tr:hover { background: var(--pink-soft); }
   tbody tr:last-child td { border-bottom: 0; }
   td.n { color: var(--faint); width: 48px; }
   td.pos { color: var(--muted); }
   .kind { font: 600 11.5px var(--mono); padding: 2px 8px; border-radius: 5px; display: inline-block; }
-  .k-kw { background: rgba(196,161,255,.14); color: var(--violet); }
-  .k-id { background: rgba(227,230,235,.08); color: var(--text); }
-  .k-num, .k-lit { background: rgba(251,191,36,.12); color: var(--amber); }
-  .k-op { background: rgba(103,232,249,.11); color: var(--cyan); }
-  .k-punct { background: rgba(154,164,181,.12); color: #b4bccb; }
+  .k-kw { background: var(--pink-soft); color: var(--pink); }
+  .k-id { background: rgba(29,33,71,.06); color: var(--text); }
+  .k-num, .k-lit { background: var(--accent-soft); color: var(--accent); }
+  .k-op { background: rgba(138,63,209,.09); color: var(--violet); }
+  .k-punct { background: rgba(125,132,168,.1); color: var(--punct); }
   .k-eof { background: var(--panel-3); color: var(--faint); }
 
   /* ---------- AST tree ---------- */
   .tree { font: 13px/1.5 var(--mono); }
-  .tree ul { list-style: none; margin: 0; padding-left: 20px; border-left: 1px dashed #2c3340; margin-left: 8px; }
+  .tree ul { list-style: none; margin: 0; padding-left: 20px; border-left: 1px dashed var(--edge); margin-left: 8px; }
   .tree > ul { border-left: 0; padding-left: 0; margin-left: 0; }
   .tnode { display: flex; align-items: center; gap: 6px; padding: 2px 6px; border-radius: 6px; cursor: pointer; width: fit-content; }
   .tnode:hover { background: var(--accent-soft); }
@@ -222,36 +241,36 @@
   .tval { color: var(--amber); margin-left: 6px; }
   .tpos { font-size: 11px; color: var(--faint); margin-left: 4px; }
   .c-stmt b { color: var(--accent); }
-  .c-expr b { color: var(--violet); }
+  .c-expr b { color: var(--pink); }
   .c-literal b { color: var(--green); }
   .c-var b { color: var(--amber); }
   li.collapsed > ul { display: none; }
   .codebox {
-    background: #101318; border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px;
+    background: var(--editor-bg); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px;
     font: 13px/1.6 var(--mono); overflow: auto; margin: 0; white-space: pre;
   }
-  .graph-wrap { overflow: auto; border: 1px solid var(--border); border-radius: 10px; background: #101318; max-height: calc(100vh - 220px); }
+  .graph-wrap { overflow: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--editor-bg); max-height: calc(100vh - 220px); }
   .graph-wrap svg { display: block; }
   .g-node rect { stroke-width: 1.2; rx: 7; }
   .g-node text { font: 12px var(--mono); fill: var(--text); }
   .g-node { cursor: pointer; }
   .g-node:hover rect { stroke-width: 2.2; }
-  .g-stmt rect { fill: rgba(122,162,255,.14); stroke: var(--accent); }
-  .g-expr rect { fill: rgba(196,161,255,.14); stroke: var(--violet); }
-  .g-literal rect { fill: rgba(74,222,128,.12); stroke: var(--green); }
-  .g-var rect { fill: rgba(251,191,36,.12); stroke: var(--amber); }
-  .g-edge { fill: none; stroke: #3b4453; stroke-width: 1.4; }
-  .g-role { font: 10.5px var(--mono); fill: var(--muted); paint-order: stroke; stroke: #101318; stroke-width: 4px; }
+  .g-stmt rect { fill: #eaf1ff; stroke: var(--accent); }
+  .g-expr rect { fill: #fde9f1; stroke: var(--pink); }
+  .g-literal rect { fill: #e6f6ee; stroke: var(--green); }
+  .g-var rect { fill: #fdf3e2; stroke: var(--amber); }
+  .g-edge { fill: none; stroke: var(--edge); stroke-width: 1.4; }
+  .g-role { font: 10.5px var(--mono); fill: var(--muted); paint-order: stroke; stroke: var(--editor-bg); stroke-width: 4px; }
   .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
   .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
   .legend .l-stmt::before { background: var(--accent); }
-  .legend .l-expr::before { background: var(--violet); }
+  .legend .l-expr::before { background: var(--pink); }
   .legend .l-literal::before { background: var(--green); }
   .legend .l-var::before { background: var(--amber); }
 
   /* ---------- diagnostics ---------- */
   .diag {
-    border: 1px solid rgba(248,113,113,.3); border-left: 3px solid var(--red); border-radius: 10px;
+    border: 1px solid rgba(214,38,80,.2); border-left: 3px solid var(--red); border-radius: 10px;
     background: linear-gradient(var(--red-soft), transparent 70%); margin-bottom: 12px; overflow: hidden;
   }
   .diag-head { display: flex; align-items: flex-start; gap: 10px; padding: 10px 14px 6px; flex-wrap: wrap; }
@@ -273,7 +292,7 @@
   .notes li::before { content: "note: "; color: var(--cyan); font-family: var(--mono); }
 
   /* ---------- output ---------- */
-  .console { background: #0a0c10; border: 1px solid var(--border); border-radius: 10px; font: 13.5px/1.7 var(--mono); padding: 10px 0; overflow: auto; }
+  .console { background: var(--editor-bg); border: 1px solid var(--border); border-radius: 10px; font: 13.5px/1.7 var(--mono); padding: 10px 0; overflow: auto; }
   .console div { padding: 0 16px; display: flex; gap: 16px; }
   .console .ln { color: var(--faint); min-width: 28px; text-align: right; user-select: none; }
   .console .rt { color: var(--pink); }
@@ -284,7 +303,7 @@
   .docs h2 { font-size: 15px; margin: 26px 0 10px; display: flex; align-items: center; gap: 8px; }
   .docs h2:first-child { margin-top: 4px; }
   .docs h2 .num { font: 600 11px var(--mono); color: var(--accent); background: var(--accent-soft); padding: 2px 7px; border-radius: 5px; }
-  .docs p, .docs li { color: #c5cad3; }
+  .docs p, .docs li { color: var(--text); }
   .docs ul { padding-left: 20px; }
   .docs code { background: var(--panel-3); padding: 1px 6px; border-radius: 4px; font-size: 12.5px; }
   .docs table td { font-family: var(--sans); }
@@ -299,7 +318,7 @@
   .stage .s-desc { font-size: 12px; color: var(--muted); margin-top: 6px; line-height: 1.4; }
   .arrow { align-self: center; color: var(--faint); font-size: 18px; }
   .grammar .nt { color: var(--accent); }
-  .grammar .tm { color: var(--green); }
+  .grammar .tm { color: var(--pink); }
   .grammar .cm { color: var(--faint); }
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
   .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
@@ -320,18 +339,9 @@
   <div class="brand">
     <div class="logo">ML</div>
     <div>
-      <h1>MiniLang Compiler Explorer</h1>
+      <h1>MiniLang Compiler</h1>
       <p>Lexer · recursive-descent parser · AST · diagnostics · interpreter</p>
     </div>
-  </div>
-  <div class="controls">
-    <select id="sampleSelect" title="Load a built-in sample program">
-      <option value="">Load sample…</option>
-    </select>
-    <label class="toggle" title="Recompile automatically while typing">
-      <input type="checkbox" id="liveToggle" checked> Live compile
-    </label>
-    <button class="btn primary" id="compileBtn">▶ Compile &amp; Run<kbd>Ctrl+Enter</kbd></button>
   </div>
 </header>
 
@@ -341,8 +351,19 @@
   <!-- ================= editor ================= -->
   <section class="pane editor-pane">
     <div class="pane-head">
-      <span class="file" id="fileName">untitled.ml</span>
-      <span class="pill" id="statusPill">not compiled</span>
+      <div class="file-wrap">
+        <span class="file" id="fileName">untitled.ml</span>
+        <span class="pill" id="statusPill">not compiled</span>
+      </div>
+      <div class="controls">
+        <select id="sampleSelect" title="Load a built-in sample program">
+          <option value="">Load sample…</option>
+        </select>
+        <label class="toggle" title="Recompile automatically while typing">
+          <input type="checkbox" id="liveToggle" checked> Live
+        </label>
+        <button class="btn primary" id="compileBtn" title="Ctrl+Enter">▶ Compile &amp; Run</button>
+      </div>
     </div>
     <div class="editor">
       <div class="gutter"><div class="gutter-inner" id="gutter"></div></div>
@@ -904,7 +925,7 @@ GET /docs              interactive Swagger UI</pre>
       $("zoomOut").onclick = () => setZoom(state.zoom - 0.15);
       $("zoomReset").onclick = () => setZoom(1);
       $("dlSvg").onclick = () => {
-        const svg = view.querySelector("svg").outerHTML.replace("<svg ", `<svg style="background:#101318;font-family:monospace" `);
+        const svg = view.querySelector("svg").outerHTML.replace("<svg ", `<svg style="background:#fffdfe;font-family:monospace" `);
         const css = [...document.styleSheets[0].cssRules].filter((x) => /\.g-/.test(x.selectorText || "")).map((x) => x.cssText).join("\n")
           .replace(/var\(--([\w-]+)\)/g, (_, v) => getComputedStyle(document.documentElement).getPropertyValue("--" + v).trim());
         download(`${baseName}.svg`, svg.replace(/(<svg[^>]*>)/, `$1<style>${css}</style>`));
