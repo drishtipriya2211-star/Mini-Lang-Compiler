@@ -1,0 +1,1033 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MiniLang Compiler Explorer</title>
+<style>
+  :root {
+    --bg: #0d0f13;
+    --panel: #14171d;
+    --panel-2: #1a1e26;
+    --panel-3: #222833;
+    --border: #262c37;
+    --text: #e3e6eb;
+    --muted: #8b94a3;
+    --faint: #586171;
+    --accent: #7aa2ff;
+    --accent-soft: rgba(122, 162, 255, .14);
+    --green: #4ade80;
+    --red: #f87171;
+    --red-soft: rgba(248, 113, 113, .13);
+    --amber: #fbbf24;
+    --violet: #c4a1ff;
+    --cyan: #67e8f9;
+    --pink: #f9a8d4;
+    --mono: "Cascadia Mono", Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", monospace;
+    --sans: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --fs: 14px;
+    --lh: 21px;
+    --pad: 14px;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 var(--sans); display: flex; flex-direction: column;
+    /* No programming ligatures: `<=` must look like `<=` in a compiler demo.
+       (font-feature-settings survives the `font` shorthand; font-variant-ligatures doesn't.) */
+    font-feature-settings: "liga" 0, "calt" 0;
+  }
+  [hidden] { display: none !important; }
+  button, select, input { font: inherit; color: inherit; }
+  code, pre, kbd { font-family: var(--mono); }
+
+  /* ---------- top bar ---------- */
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 10px 18px; border-bottom: 1px solid var(--border); background: var(--panel);
+    flex-wrap: wrap;
+  }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .logo {
+    width: 36px; height: 36px; border-radius: 9px; display: grid; place-items: center;
+    background: linear-gradient(135deg, #7aa2ff, #c4a1ff); color: #0d0f13;
+    font: 700 15px var(--mono); letter-spacing: -.5px;
+  }
+  .brand h1 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: .2px; }
+  .brand p { margin: 0; font-size: 12px; color: var(--muted); }
+  .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  select, .btn {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 7px 12px; cursor: pointer; font-size: 13px;
+  }
+  select:hover, .btn:hover { border-color: #3a4352; }
+  .btn.primary { background: var(--accent); color: #0b0d12; border-color: transparent; font-weight: 600; }
+  .btn.primary:hover { filter: brightness(1.08); }
+  .btn.small { padding: 4px 10px; font-size: 12px; border-radius: 6px; }
+  kbd {
+    font-size: 11px; padding: 1px 5px; border-radius: 4px; margin-left: 6px;
+    background: rgba(0,0,0,.18); border: 1px solid rgba(0,0,0,.2);
+  }
+  .toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; user-select: none; }
+  .toggle input { accent-color: var(--accent); }
+
+  .banner {
+    margin: 0; padding: 10px 18px; background: var(--red-soft); color: #fecaca;
+    border-bottom: 1px solid rgba(248,113,113,.35); font-size: 13px;
+  }
+  .banner code { background: rgba(0,0,0,.3); padding: 1px 6px; border-radius: 4px; }
+
+  /* ---------- layout ---------- */
+  .layout {
+    flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 45fr) minmax(0, 55fr);
+    gap: 12px; padding: 12px;
+  }
+  .pane {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  }
+  .pane-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 8px 14px; border-bottom: 1px solid var(--border); background: var(--panel-2);
+    font-size: 13px;
+  }
+  .file { font-family: var(--mono); color: var(--muted); display: flex; align-items: center; gap: 8px; }
+  .file::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+  .pill {
+    font-size: 12px; padding: 3px 10px; border-radius: 999px; font-weight: 600;
+    background: var(--panel-3); color: var(--muted);
+  }
+  .pill.ok { background: rgba(74,222,128,.13); color: var(--green); }
+  .pill.err { background: var(--red-soft); color: var(--red); }
+
+  /* ---------- editor ---------- */
+  .editor { flex: 1; min-height: 0; display: flex; position: relative; background: #101318; }
+  .gutter {
+    width: 52px; flex: none; overflow: hidden; border-right: 1px solid var(--border);
+    font: var(--fs)/var(--lh) var(--mono); color: var(--faint); text-align: right; user-select: none;
+  }
+  .gutter-inner { padding: var(--pad) 10px var(--pad) 0; will-change: transform; }
+  .gutter-inner div { height: var(--lh); position: relative; }
+  .gutter-inner div.err { color: var(--red); font-weight: 700; }
+  .gutter-inner div.err::before {
+    content: ""; position: absolute; left: 6px; top: 7px; width: 7px; height: 7px;
+    border-radius: 50%; background: var(--red);
+  }
+  .code { position: relative; flex: 1; min-width: 0; }
+  .code pre, .code textarea {
+    position: absolute; inset: 0; margin: 0; border: 0; padding: var(--pad) 16px;
+    font: var(--fs)/var(--lh) var(--mono); letter-spacing: 0; tab-size: 4;
+    white-space: pre; overflow-wrap: normal; word-break: normal;
+  }
+  .code pre { overflow: hidden; pointer-events: none; color: var(--text); }
+  .code pre code { display: block; font: inherit; will-change: transform; }
+  .code textarea {
+    background: transparent; color: transparent; caret-color: #fff; resize: none; outline: none;
+    overflow: auto;
+  }
+  .code textarea::selection { background: rgba(122,162,255,.3); color: transparent; }
+  .t-kw { color: var(--violet); }
+  .t-lit { color: var(--amber); }
+  .t-num { color: var(--amber); }
+  .t-id { color: #e3e6eb; }
+  .t-op { color: var(--cyan); }
+  .t-punct { color: #9aa4b5; }
+  .t-com { color: var(--faint); font-style: italic; }
+  .t-bad { color: var(--red); }
+  .err-mark {
+    text-decoration: underline wavy var(--red); text-decoration-skip-ink: none;
+    text-underline-offset: 3px; background: var(--red-soft);
+  }
+  .err-eol { background: var(--red); opacity: .55; border-radius: 2px; }
+
+  .statusbar {
+    display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+    padding: 6px 14px; border-top: 1px solid var(--border); background: var(--panel-2);
+    font: 12px var(--mono); color: var(--muted);
+  }
+
+  /* ---------- tabs ---------- */
+  .tabs {
+    display: flex; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--border);
+    background: var(--panel-2); overflow-x: auto;
+  }
+  .tabs button {
+    background: none; border: 0; padding: 8px 14px 10px; cursor: pointer; color: var(--muted);
+    font-size: 13px; font-weight: 550; border-bottom: 2px solid transparent; white-space: nowrap;
+    display: flex; align-items: center; gap: 7px;
+  }
+  .tabs button:hover { color: var(--text); }
+  .tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+  .badge {
+    font: 600 11px var(--mono); padding: 1px 7px; border-radius: 999px;
+    background: var(--panel-3); color: var(--muted);
+  }
+  .badge.err { background: var(--red); color: #1a0b0b; }
+  .badge.ok { background: rgba(74,222,128,.15); color: var(--green); }
+  .tab-body { flex: 1; min-height: 0; overflow: auto; }
+  .tab { padding: 14px 16px 22px; }
+  .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  .seg { display: inline-flex; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 2px; }
+  .seg button { background: none; border: 0; padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 12.5px; color: var(--muted); }
+  .seg button.active { background: var(--panel-3); color: var(--text); }
+  .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .empty { color: var(--muted); padding: 28px 8px; text-align: center; }
+  .empty.ok { color: var(--green); }
+  .empty .big { font-size: 28px; display: block; margin-bottom: 6px; }
+
+  /* ---------- tokens ---------- */
+  .summary { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip {
+    font: 12px var(--mono); padding: 2px 8px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--panel-2); color: var(--muted);
+  }
+  .search {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 10px; font-size: 13px; width: 200px; outline: none;
+  }
+  .search:focus { border-color: var(--accent); }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th {
+    text-align: left; font-weight: 600; color: var(--muted); font-size: 11.5px; text-transform: uppercase;
+    letter-spacing: .6px; padding: 8px 12px; background: var(--panel-2); position: sticky; top: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  td { padding: 6px 12px; border-bottom: 1px solid #1d222b; font-family: var(--mono); }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: var(--accent-soft); }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.n { color: var(--faint); width: 48px; }
+  td.pos { color: var(--muted); }
+  .kind { font: 600 11.5px var(--mono); padding: 2px 8px; border-radius: 5px; display: inline-block; }
+  .k-kw { background: rgba(196,161,255,.14); color: var(--violet); }
+  .k-id { background: rgba(227,230,235,.08); color: var(--text); }
+  .k-num, .k-lit { background: rgba(251,191,36,.12); color: var(--amber); }
+  .k-op { background: rgba(103,232,249,.11); color: var(--cyan); }
+  .k-punct { background: rgba(154,164,181,.12); color: #b4bccb; }
+  .k-eof { background: var(--panel-3); color: var(--faint); }
+
+  /* ---------- AST tree ---------- */
+  .tree { font: 13px/1.5 var(--mono); }
+  .tree ul { list-style: none; margin: 0; padding-left: 20px; border-left: 1px dashed #2c3340; margin-left: 8px; }
+  .tree > ul { border-left: 0; padding-left: 0; margin-left: 0; }
+  .tnode { display: flex; align-items: center; gap: 6px; padding: 2px 6px; border-radius: 6px; cursor: pointer; width: fit-content; }
+  .tnode:hover { background: var(--accent-soft); }
+  .twisty { width: 16px; color: var(--faint); font-size: 10px; text-align: center; flex: none; }
+  .role { font-size: 11px; color: var(--faint); }
+  .role::after { content: ":"; }
+  .tlabel b { font-weight: 600; }
+  .tval { color: var(--amber); margin-left: 6px; }
+  .tpos { font-size: 11px; color: var(--faint); margin-left: 4px; }
+  .c-stmt b { color: var(--accent); }
+  .c-expr b { color: var(--violet); }
+  .c-literal b { color: var(--green); }
+  .c-var b { color: var(--amber); }
+  li.collapsed > ul { display: none; }
+  .codebox {
+    background: #101318; border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px;
+    font: 13px/1.6 var(--mono); overflow: auto; margin: 0; white-space: pre;
+  }
+  .graph-wrap { overflow: auto; border: 1px solid var(--border); border-radius: 10px; background: #101318; max-height: calc(100vh - 220px); }
+  .graph-wrap svg { display: block; }
+  .g-node rect { stroke-width: 1.2; rx: 7; }
+  .g-node text { font: 12px var(--mono); fill: var(--text); }
+  .g-node { cursor: pointer; }
+  .g-node:hover rect { stroke-width: 2.2; }
+  .g-stmt rect { fill: rgba(122,162,255,.14); stroke: var(--accent); }
+  .g-expr rect { fill: rgba(196,161,255,.14); stroke: var(--violet); }
+  .g-literal rect { fill: rgba(74,222,128,.12); stroke: var(--green); }
+  .g-var rect { fill: rgba(251,191,36,.12); stroke: var(--amber); }
+  .g-edge { fill: none; stroke: #3b4453; stroke-width: 1.4; }
+  .g-role { font: 10.5px var(--mono); fill: var(--muted); paint-order: stroke; stroke: #101318; stroke-width: 4px; }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+  .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+  .legend .l-stmt::before { background: var(--accent); }
+  .legend .l-expr::before { background: var(--violet); }
+  .legend .l-literal::before { background: var(--green); }
+  .legend .l-var::before { background: var(--amber); }
+
+  /* ---------- diagnostics ---------- */
+  .diag {
+    border: 1px solid rgba(248,113,113,.3); border-left: 3px solid var(--red); border-radius: 10px;
+    background: linear-gradient(var(--red-soft), transparent 70%); margin-bottom: 12px; overflow: hidden;
+  }
+  .diag-head { display: flex; align-items: flex-start; gap: 10px; padding: 10px 14px 6px; flex-wrap: wrap; }
+  .phase { font: 700 10.5px var(--mono); text-transform: uppercase; letter-spacing: .7px; padding: 3px 8px; border-radius: 5px; flex: none; margin-top: 1px; }
+  .ph-lexical { background: rgba(251,191,36,.16); color: var(--amber); }
+  .ph-syntax { background: var(--red-soft); color: var(--red); }
+  .ph-semantic { background: rgba(196,161,255,.16); color: var(--violet); }
+  .ph-runtime { background: rgba(249,168,212,.16); color: var(--pink); }
+  .diag-msg { flex: 1; min-width: 200px; font-weight: 550; }
+  .loc {
+    background: none; border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px;
+    font: 12px var(--mono); color: var(--accent); cursor: pointer; flex: none;
+  }
+  .loc:hover { background: var(--accent-soft); }
+  .snippet { margin: 4px 14px 10px; font: 13px/1.55 var(--mono); white-space: pre; overflow-x: auto; color: var(--text); }
+  .snippet .ln { color: var(--faint); }
+  .snippet .caret { color: var(--red); font-weight: 700; }
+  .notes { margin: 0 14px 12px; padding: 0; list-style: none; font-size: 12.5px; color: var(--muted); }
+  .notes li::before { content: "note: "; color: var(--cyan); font-family: var(--mono); }
+
+  /* ---------- output ---------- */
+  .console { background: #0a0c10; border: 1px solid var(--border); border-radius: 10px; font: 13.5px/1.7 var(--mono); padding: 10px 0; overflow: auto; }
+  .console div { padding: 0 16px; display: flex; gap: 16px; }
+  .console .ln { color: var(--faint); min-width: 28px; text-align: right; user-select: none; }
+  .console .rt { color: var(--pink); }
+  .console-head { display: flex; justify-content: space-between; color: var(--muted); font-size: 12.5px; margin-bottom: 8px; }
+
+  /* ---------- docs ---------- */
+  .docs { max-width: 900px; }
+  .docs h2 { font-size: 15px; margin: 26px 0 10px; display: flex; align-items: center; gap: 8px; }
+  .docs h2:first-child { margin-top: 4px; }
+  .docs h2 .num { font: 600 11px var(--mono); color: var(--accent); background: var(--accent-soft); padding: 2px 7px; border-radius: 5px; }
+  .docs p, .docs li { color: #c5cad3; }
+  .docs ul { padding-left: 20px; }
+  .docs code { background: var(--panel-3); padding: 1px 6px; border-radius: 4px; font-size: 12.5px; }
+  .docs table td { font-family: var(--sans); }
+  .docs table td code { font-family: var(--mono); }
+  .pipeline { display: flex; align-items: stretch; gap: 6px; flex-wrap: wrap; margin: 6px 0 4px; }
+  .stage {
+    flex: 1 1 120px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 12px; position: relative;
+  }
+  .stage .s-name { font-weight: 650; font-size: 13px; }
+  .stage .s-out { font: 11.5px var(--mono); color: var(--accent); margin-top: 2px; }
+  .stage .s-desc { font-size: 12px; color: var(--muted); margin-top: 6px; line-height: 1.4; }
+  .arrow { align-self: center; color: var(--faint); font-size: 18px; }
+  .grammar .nt { color: var(--accent); }
+  .grammar .tm { color: var(--green); }
+  .grammar .cm { color: var(--faint); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .card h3 { margin: 0 0 4px; font-size: 13px; }
+  .card p { margin: 0; font-size: 12.5px; color: var(--muted); }
+
+  @media (max-width: 960px) {
+    body { height: auto; }
+    .layout { grid-template-columns: 1fr; }
+    .editor-pane { height: 60vh; }
+    .output-pane { height: 75vh; }
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">ML</div>
+    <div>
+      <h1>MiniLang Compiler Explorer</h1>
+      <p>Lexer · recursive-descent parser · AST · diagnostics · interpreter</p>
+    </div>
+  </div>
+  <div class="controls">
+    <select id="sampleSelect" title="Load a built-in sample program">
+      <option value="">Load sample…</option>
+    </select>
+    <label class="toggle" title="Recompile automatically while typing">
+      <input type="checkbox" id="liveToggle" checked> Live compile
+    </label>
+    <button class="btn primary" id="compileBtn">▶ Compile &amp; Run<kbd>Ctrl+Enter</kbd></button>
+  </div>
+</header>
+
+<p class="banner" id="banner" hidden></p>
+
+<main class="layout">
+  <!-- ================= editor ================= -->
+  <section class="pane editor-pane">
+    <div class="pane-head">
+      <span class="file" id="fileName">untitled.ml</span>
+      <span class="pill" id="statusPill">not compiled</span>
+    </div>
+    <div class="editor">
+      <div class="gutter"><div class="gutter-inner" id="gutter"></div></div>
+      <div class="code">
+        <pre aria-hidden="true"><code id="highlight"></code></pre>
+        <textarea id="source" spellcheck="false" wrap="off" autocomplete="off" autocapitalize="off"
+                  aria-label="MiniLang source code"></textarea>
+      </div>
+    </div>
+    <div class="statusbar">
+      <span id="cursorPos">Ln 1, Col 1</span>
+      <span id="stats"></span>
+    </div>
+  </section>
+
+  <!-- ================= output panes ================= -->
+  <section class="pane output-pane">
+    <nav class="tabs" id="tabs">
+      <button data-tab="tokens" class="active">Tokens <span class="badge" id="tokBadge">0</span></button>
+      <button data-tab="ast">AST <span class="badge" id="astBadge">0</span></button>
+      <button data-tab="diag">Diagnostics <span class="badge" id="diagBadge">0</span></button>
+      <button data-tab="output">Output</button>
+      <button data-tab="docs">Architecture &amp; Docs</button>
+    </nav>
+    <div class="tab-body" id="tabBody">
+
+      <div class="tab" id="tab-tokens">
+        <div class="toolbar">
+          <div class="summary" id="tokSummary"></div>
+          <input class="search" id="tokFilter" placeholder="Filter kind or lexeme…">
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>#</th><th>Kind</th><th>Lexeme</th><th>Line</th><th>Col</th></tr></thead>
+            <tbody id="tokRows"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="tab" id="tab-ast" hidden>
+        <div class="toolbar">
+          <div class="seg" id="astSeg">
+            <button data-view="tree" class="active">Interactive</button>
+            <button data-view="graph">Graph</button>
+            <button data-view="text">Text tree</button>
+            <button data-view="dot">Graphviz DOT</button>
+          </div>
+          <div class="actions" id="astActions"></div>
+        </div>
+        <div id="astView"></div>
+      </div>
+
+      <div class="tab" id="tab-diag" hidden>
+        <div id="diagView"></div>
+      </div>
+
+      <div class="tab" id="tab-output" hidden>
+        <div id="outputView"></div>
+      </div>
+
+      <div class="tab" id="tab-docs" hidden>
+        <article class="docs">
+          <h2><span class="num">01</span> Compiler pipeline</h2>
+          <div class="pipeline">
+            <div class="stage"><div class="s-name">Source</div><div class="s-out">.ml text</div>
+              <div class="s-desc">Imperative program with <code>let</code>, <code>if</code>, <code>while</code>, <code>print</code>.</div></div>
+            <div class="arrow">→</div>
+            <div class="stage"><div class="s-name">Lexer</div><div class="s-out">Token[]</div>
+              <div class="s-desc">One master regex of named groups; tracks line &amp; column; reports bad characters.</div></div>
+            <div class="arrow">→</div>
+            <div class="stage"><div class="s-name">Parser</div><div class="s-out">AST</div>
+              <div class="s-desc">Recursive descent for statements, precedence climbing for expressions, panic-mode recovery.</div></div>
+            <div class="arrow">→</div>
+            <div class="stage"><div class="s-name">Semantic</div><div class="s-out">scope errors</div>
+              <div class="s-desc">Block scopes: declare-before-use, no redeclaration in the same scope.</div></div>
+            <div class="arrow">→</div>
+            <div class="stage"><div class="s-name">Back-ends</div><div class="s-out">tree · DOT · run</div>
+              <div class="s-desc">Indented text tree, Graphviz DOT export and a tree-walking interpreter.</div></div>
+          </div>
+
+          <h2><span class="num">02</span> Grammar (EBNF)</h2>
+<pre class="codebox grammar"><span class="nt">program</span>    ::= <span class="nt">statement</span>* EOF
+<span class="nt">statement</span>  ::= <span class="nt">letStmt</span> | <span class="nt">assignStmt</span> | <span class="nt">ifStmt</span> | <span class="nt">whileStmt</span> | <span class="nt">printStmt</span> | <span class="nt">block</span>
+<span class="nt">letStmt</span>    ::= <span class="tm">"let"</span> IDENT <span class="tm">"="</span> <span class="nt">expr</span> <span class="tm">";"</span>
+<span class="nt">assignStmt</span> ::= IDENT <span class="tm">"="</span> <span class="nt">expr</span> <span class="tm">";"</span>
+<span class="nt">ifStmt</span>     ::= <span class="tm">"if"</span> <span class="tm">"("</span> <span class="nt">expr</span> <span class="tm">")"</span> <span class="nt">statement</span> ( <span class="tm">"else"</span> <span class="nt">statement</span> )?
+<span class="nt">whileStmt</span>  ::= <span class="tm">"while"</span> <span class="tm">"("</span> <span class="nt">expr</span> <span class="tm">")"</span> <span class="nt">statement</span>
+<span class="nt">printStmt</span>  ::= <span class="tm">"print"</span> <span class="tm">"("</span> <span class="nt">expr</span> <span class="tm">")"</span> <span class="tm">";"</span>
+<span class="nt">block</span>      ::= <span class="tm">"{"</span> <span class="nt">statement</span>* <span class="tm">"}"</span>
+
+<span class="nt">expr</span>       ::= <span class="nt">unary</span> ( BINOP <span class="nt">expr</span> )*      <span class="cm">-- precedence climbing, table below</span>
+<span class="nt">unary</span>      ::= <span class="tm">"-"</span> <span class="nt">unary</span> | <span class="tm">"not"</span> <span class="nt">expr</span>₃ | <span class="nt">primary</span>
+<span class="nt">primary</span>    ::= NUMBER | <span class="tm">"true"</span> | <span class="tm">"false"</span> | IDENT | <span class="tm">"("</span> <span class="nt">expr</span> <span class="tm">")"</span>
+
+<span class="cm">-- else-if needs no special rule: the else branch is itself an ifStmt.</span>
+<span class="cm">-- The dangling else binds to the nearest if.</span></pre>
+
+          <h2><span class="num">03</span> Operator precedence</h2>
+          <p>The parser reads binary operators from a precedence <em>table</em> instead of one grammar rule per level. To parse at level <code>p</code>, it reads a unary operand and then takes operators with precedence ≥ <code>p</code>. Each right operand is parsed at <code>prec + 1</code>, which makes every operator left-associative.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Level</th><th>Operators</th><th>Assoc.</th><th>Example → parsed as</th></tr></thead>
+              <tbody>
+                <tr><td>7 (tightest)</td><td><code>-x</code> (unary)</td><td>right</td><td><code>-a * b</code> → <code>(-a) * b</code></td></tr>
+                <tr><td>6</td><td><code>*</code> <code>/</code> <code>%</code></td><td>left</td><td><code>2 + 3 * 4</code> → <code>2 + (3 * 4)</code></td></tr>
+                <tr><td>5</td><td><code>+</code> <code>-</code></td><td>left</td><td><code>10 - 4 - 3</code> → <code>(10 - 4) - 3</code></td></tr>
+                <tr><td>4</td><td><code>&lt;</code> <code>&gt;</code> <code>&lt;=</code> <code>&gt;=</code></td><td>left</td><td><code>a + 1 &lt; b</code> → <code>(a + 1) &lt; b</code></td></tr>
+                <tr><td>3</td><td><code>==</code> <code>!=</code> · <code>not</code></td><td>left</td><td><code>not a == b</code> → <code>not (a == b)</code></td></tr>
+                <tr><td>2</td><td><code>and</code></td><td>left</td><td><code>a or b and c</code> → <code>a or (b and c)</code></td></tr>
+                <tr><td>1 (loosest)</td><td><code>or</code></td><td>left</td><td>short-circuit evaluation</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h2><span class="num">04</span> Lexical structure</h2>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Token class</th><th>Pattern / members</th></tr></thead>
+              <tbody>
+                <tr><td>Keywords</td><td><code>let if else while print and or not true false</code></td></tr>
+                <tr><td>IDENT</td><td><code>[A-Za-z_][A-Za-z0-9_]*</code> (unless it is a keyword)</td></tr>
+                <tr><td>NUMBER</td><td><code>\d+</code> (integers)</td></tr>
+                <tr><td>Operators</td><td><code>== != &lt;= &gt;= &lt; &gt; = + - * / %</code> (longest match first)</td></tr>
+                <tr><td>Punctuation</td><td><code>( ) { } ;</code></td></tr>
+                <tr><td>Skipped</td><td>whitespace, newlines (advance the line counter), <code>// line comments</code></td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h2><span class="num">05</span> Error handling</h2>
+          <div class="cards">
+            <div class="card"><h3>Panic-mode recovery</h3><p>On a syntax error the parser records a diagnostic, then skips tokens until it passes a <code>;</code> or reaches <code>let if while print { }</code>. Then it continues, so one run reports every error.</p></div>
+            <div class="card"><h3>Caret diagnostics</h3><p>Every error carries a line, column and length. Missing <code>;</code> / <code>)</code> are reported just past the previous token, where they belong.</p></div>
+            <div class="card"><h3>Helpful notes</h3><p>Hints for common mistakes: <code>=</code> in a condition (did you mean <code>==</code>?), <code>!</code> → <code>not</code>, and unclosed <code>{</code> with the opening position.</p></div>
+            <div class="card"><h3>Four phases</h3><p><b>lexical</b> (bad characters), <b>syntax</b> (grammar), <b>semantic</b> (scopes) and <b>runtime</b> (division by zero, infinite-loop guard).</p></div>
+          </div>
+
+          <h2><span class="num">06</span> Semantics</h2>
+          <ul>
+            <li>Two value types: <b>integers</b> and <b>booleans</b>. Arithmetic needs integers. <code>/</code> and <code>%</code> truncate toward zero, as in C.</li>
+            <li><code>{ }</code> opens a new scope. The body of an <code>if</code> or <code>while</code> always gets its own scope.</li>
+            <li>A variable must be declared with <code>let</code> before use, and cannot be redeclared in the same scope. Inner scopes may shadow outer ones.</li>
+            <li>Conditions accept booleans or integers (non-zero is true). <code>and</code> / <code>or</code> short-circuit.</li>
+            <li>The interpreter stops after 200,000 steps to guard against infinite loops.</li>
+          </ul>
+
+          <h2><span class="num">07</span> Implementation map (<code>minilang.py</code>)</h2>
+          <div class="table-wrap">
+            <table>
+              <tbody>
+                <tr><td><code>tokenize()</code></td><td>Regex lexer with <code>TOKEN_SPEC</code> named groups and line/column tracking</td></tr>
+                <tr><td><code>Parser</code></td><td>Recursive descent; <code>expression()</code> uses <code>BINARY_PRECEDENCE</code>; <code>synchronize()</code> does panic mode</td></tr>
+                <tr><td><code>Program, Let, If, Binary, …</code></td><td>AST node dataclasses with <code>children()</code> and <code>to_dict()</code></td></tr>
+                <tr><td><code>SemanticAnalyzer</code></td><td>Scope stack; undeclared use and redeclaration checks</td></tr>
+                <tr><td><code>ast_to_text()</code> / <code>ast_to_dot()</code></td><td>Indented tree and Graphviz DOT visualisation</td></tr>
+                <tr><td><code>Interpreter</code></td><td>Tree-walking evaluator that produces program output</td></tr>
+                <tr><td><code>compile_source()</code></td><td>Runs the whole pipeline and returns JSON; used by both the CLI and the API</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h2><span class="num">08</span> REST API</h2>
+<pre class="codebox">POST /api/compile
+{ "source": "let x = 2 + 3;\nprint(x);", "filename": "demo.ml", "run": true }
+
+→ { "success": true,
+    "tokens":      [{ "kind": "LET", "lexeme": "let", "line": 1, "col": 1 }, …],
+    "ast":         { "type": "Program", "children": [ … ] },
+    "tree":        "Program\n└── Let x\n    └── value: BinOp + …",
+    "dot":         "digraph AST { … }",
+    "diagnostics": [{ "phase": "syntax", "message": "…", "line": 2, "col": 9,
+                      "source_line": "…", "caret": "        ^", "rendered": "…" }],
+    "output":      ["5"],
+    "stats":       { "tokens": 12, "ast_nodes": 6, "errors": 0, "timings_ms": { … } } }
+
+GET /api/samples       built-in sample programs
+GET /docs              interactive Swagger UI</pre>
+        </article>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+  "use strict";
+
+  const API = location.protocol === "file:" ? "http://127.0.0.1:8000" : "";
+  const STORAGE_KEY = "minilang.source";
+  const $ = (id) => document.getElementById(id);
+  const ta = $("source"), hl = $("highlight"), gutter = $("gutter");
+
+  const state = { result: null, astView: "tree", zoom: 1, seq: 0, timer: null, diagRanges: [] };
+
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const store = {
+    get() { try { return localStorage.getItem(STORAGE_KEY); } catch { return null; } },
+    set(v) { try { localStorage.setItem(STORAGE_KEY, v); } catch { /* storage unavailable */ } },
+  };
+
+  // ------------------------------------------------------------------
+  // Token categories (shared by the editor highlighter and the token table)
+  // ------------------------------------------------------------------
+  const KEYWORDS = new Set(["let", "if", "else", "while", "print", "and", "or", "not"]);
+  const KIND_CAT = {
+    LET: "kw", IF: "kw", ELSE: "kw", WHILE: "kw", PRINT: "kw", AND: "kw", OR: "kw", NOT: "kw",
+    TRUE: "lit", FALSE: "lit", IDENT: "id", NUMBER: "num", EOF: "eof",
+    LPAREN: "punct", RPAREN: "punct", LBRACE: "punct", RBRACE: "punct", SEMI: "punct",
+  };
+  const kindCat = (k) => KIND_CAT[k] || "op";
+
+  // ------------------------------------------------------------------
+  // Editor: transparent textarea over a syntax-highlighted <pre>
+  // ------------------------------------------------------------------
+  const LEX = /(\/\/[^\n]*)|(\d+)|([A-Za-z_]\w*)|(==|!=|<=|>=|[+\-*\/%<>=])|([(){};])|(\s+)|(.)/g;
+
+  function lineStarts(src) {
+    const starts = [0];
+    for (let i = 0; i < src.length; i++) if (src[i] === "\n") starts.push(i + 1);
+    return starts;
+  }
+
+  function renderHighlight() {
+    const src = ta.value;
+    const n = src.length;
+    const cls = new Array(n);
+    let m;
+    LEX.lastIndex = 0;
+    while ((m = LEX.exec(src))) {
+      let c = null;
+      if (m[1]) c = "com";
+      else if (m[2]) c = "num";
+      else if (m[3]) c = KEYWORDS.has(m[3]) ? "kw" : (m[3] === "true" || m[3] === "false") ? "lit" : "id";
+      else if (m[4]) c = "op";
+      else if (m[5]) c = "punct";
+      else if (m[7]) c = "bad";
+      for (let i = m.index; i < LEX.lastIndex; i++) cls[i] = c;
+    }
+
+    // Error underlines from the last compile (only while the text is unchanged).
+    const err = new Uint8Array(n);
+    const eol = new Set();
+    const starts = lineStarts(src);
+    for (const d of state.diagRanges) {
+      if (d.line < 1 || d.line > starts.length) continue;
+      const ls = starts[d.line - 1];
+      const le = d.line < starts.length ? starts[d.line] - 1 : n;
+      const s = ls + d.col - 1;
+      if (s >= le) { eol.add(d.line); continue; }
+      for (let i = s; i < Math.min(s + d.length, le); i++) err[i] = 1;
+    }
+
+    let html = "", line = 1, i = 0;
+    while (i < n) {
+      if (src[i] === "\n") {
+        if (eol.has(line)) html += '<span class="err-eol"> </span>';
+        html += "\n"; line++; i++; continue;
+      }
+      let j = i;
+      while (j < n && src[j] !== "\n" && cls[j] === cls[i] && err[j] === err[i]) j++;
+      const text = esc(src.slice(i, j));
+      const classes = [cls[i] ? "t-" + cls[i] : "", err[i] ? "err-mark" : ""].filter(Boolean).join(" ");
+      html += classes ? `<span class="${classes}">${text}</span>` : text;
+      i = j;
+    }
+    if (eol.has(line)) html += '<span class="err-eol"> </span>';
+    hl.innerHTML = html + "\n";
+
+    const errLines = new Map();
+    for (const d of state.diagRanges) if (!errLines.has(d.line)) errLines.set(d.line, d.message);
+    let g = "";
+    for (let k = 1; k <= starts.length; k++) {
+      g += errLines.has(k) ? `<div class="err" title="${esc(errLines.get(k))}">${k}</div>` : `<div>${k}</div>`;
+    }
+    gutter.innerHTML = g;
+    syncScroll();
+  }
+
+  function syncScroll() {
+    hl.style.transform = `translate(${-ta.scrollLeft}px, ${-ta.scrollTop}px)`;
+    gutter.style.transform = `translateY(${-ta.scrollTop}px)`;
+  }
+
+  function updateCursor() {
+    const before = ta.value.slice(0, ta.selectionStart);
+    const line = before.split("\n").length;
+    const col = before.length - before.lastIndexOf("\n");
+    $("cursorPos").textContent = `Ln ${line}, Col ${col}`;
+  }
+
+  function selectAt(line, col, length) {
+    const starts = lineStarts(ta.value);
+    const start = (starts[line - 1] ?? ta.value.length) + col - 1;
+    if (!length) {
+      const m = /^(==|!=|<=|>=|[A-Za-z_]\w*|\d+|.)/.exec(ta.value.slice(start));
+      length = m ? m[0].length : 1;
+    }
+    ta.focus();
+    ta.setSelectionRange(start, Math.min(start + length, ta.value.length));
+    const lh = parseFloat(getComputedStyle(ta).lineHeight) || 21;
+    ta.scrollTop = Math.max(0, (line - 1) * lh - ta.clientHeight / 2);
+    syncScroll();
+    updateCursor();
+  }
+
+  ta.addEventListener("scroll", syncScroll);
+  ta.addEventListener("input", () => {
+    state.diagRanges = [];   // positions are stale once the text changes
+    renderHighlight();
+    updateCursor();
+    store.set(ta.value);
+    if ($("liveToggle").checked) {
+      clearTimeout(state.timer);
+      state.timer = setTimeout(compile, 350);
+    }
+  });
+  ["keyup", "click", "select"].forEach((ev) => ta.addEventListener(ev, updateCursor));
+
+  ta.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); compile(); return; }
+    if (e.key === "Tab" && !e.shiftKey) {
+      e.preventDefault();
+      ta.setRangeText("    ", ta.selectionStart, ta.selectionEnd, "end");
+      ta.dispatchEvent(new Event("input"));
+    } else if (e.key === "Enter" && !e.ctrlKey) {
+      // Keep the indentation of the current line; indent further after '{'.
+      const before = ta.value.slice(0, ta.selectionStart);
+      const cur = before.slice(before.lastIndexOf("\n") + 1);
+      let indent = cur.match(/^[ \t]*/)[0];
+      if (/\{\s*$/.test(cur)) indent += "    ";
+      e.preventDefault();
+      ta.setRangeText("\n" + indent, ta.selectionStart, ta.selectionEnd, "end");
+      ta.dispatchEvent(new Event("input"));
+    } else if (e.key === "}" && ta.selectionStart === ta.selectionEnd) {
+      const before = ta.value.slice(0, ta.selectionStart);
+      const cur = before.slice(before.lastIndexOf("\n") + 1);
+      if (/^ {4,}$/.test(cur)) {
+        e.preventDefault();
+        ta.setRangeText("}", ta.selectionStart - 4, ta.selectionStart, "end");
+        ta.dispatchEvent(new Event("input"));
+      }
+    }
+  });
+
+  // ------------------------------------------------------------------
+  // Backend
+  // ------------------------------------------------------------------
+  function showBanner(html) { $("banner").innerHTML = html; $("banner").hidden = !html; }
+
+  async function compile() {
+    clearTimeout(state.timer);
+    const seq = ++state.seq;
+    const source = ta.value;
+    try {
+      const res = await fetch(`${API}/api/compile`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source, filename: $("fileName").textContent, run: true }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      const result = await res.json();
+      if (seq !== state.seq || source !== ta.value) return;   // a newer edit/compile superseded this one
+      showBanner("");
+      state.result = result;
+      state.diagRanges = result.diagnostics;
+      renderAll();
+    } catch (err) {
+      if (seq !== state.seq) return;
+      showBanner(`Can't reach the MiniLang backend (${esc(err.message)}). Start it with <code>python server.py</code>, then open <code>http://127.0.0.1:8000</code>.`);
+      $("statusPill").className = "pill err";
+      $("statusPill").textContent = "backend offline";
+    }
+  }
+
+  async function loadSamples() {
+    try {
+      const res = await fetch(`${API}/api/samples`);
+      const samples = await res.json();
+      const sel = $("sampleSelect");
+      for (const s of samples) {
+        const opt = document.createElement("option");
+        opt.value = s.name;
+        opt.textContent = s.description ? `${s.name} - ${s.description}` : s.name;
+        opt.dataset.source = s.source;
+        sel.appendChild(opt);
+      }
+      return samples;
+    } catch {
+      return [];
+    }
+  }
+
+  $("sampleSelect").addEventListener("change", (e) => {
+    const opt = e.target.selectedOptions[0];
+    if (!opt || !opt.value) return;
+    ta.value = opt.dataset.source;
+    $("fileName").textContent = opt.value;
+    state.diagRanges = [];
+    store.set(ta.value);
+    ta.scrollTop = 0; ta.scrollLeft = 0;
+    renderHighlight();
+    compile();
+  });
+  $("compileBtn").addEventListener("click", compile);
+
+  // ------------------------------------------------------------------
+  // Rendering
+  // ------------------------------------------------------------------
+  function renderAll() {
+    const r = state.result;
+    const errs = r.stats.errors;
+    $("statusPill").className = "pill " + (errs ? "err" : "ok");
+    $("statusPill").textContent = errs ? `✕ ${errs} error${errs > 1 ? "s" : ""}` : "✓ compiled";
+    const t = r.stats.timings_ms;
+    const total = Object.values(t).reduce((a, b) => a + b, 0);
+    $("stats").textContent = `${r.stats.lines} lines · ${r.stats.tokens} tokens · ${r.stats.ast_nodes} nodes · ${total.toFixed(2)} ms`;
+    $("tokBadge").textContent = r.stats.tokens;
+    $("astBadge").textContent = r.stats.ast_nodes;
+    $("diagBadge").textContent = r.diagnostics.length;
+    $("diagBadge").className = "badge " + (r.diagnostics.length ? "err" : "ok");
+    renderHighlight();
+    renderTokens();
+    renderAst();
+    renderDiagnostics();
+    renderOutput();
+  }
+
+  // ---- tokens ----
+  const CAT_NAMES = { kw: "keywords", id: "identifiers", num: "numbers", lit: "booleans", op: "operators", punct: "punctuation" };
+
+  function renderTokens() {
+    const tokens = state.result?.tokens || [];
+    const counts = {};
+    for (const t of tokens) counts[kindCat(t.kind)] = (counts[kindCat(t.kind)] || 0) + 1;
+    $("tokSummary").innerHTML = Object.entries(CAT_NAMES)
+      .filter(([k]) => counts[k])
+      .map(([k, name]) => `<span class="chip">${counts[k]} ${name}</span>`).join("");
+
+    const q = $("tokFilter").value.trim().toLowerCase();
+    const rows = [];
+    tokens.forEach((t, i) => {
+      if (q && !t.kind.toLowerCase().includes(q) && !t.lexeme.toLowerCase().includes(q)) return;
+      if (rows.length >= 2000) return;
+      rows.push(`<tr data-line="${t.line}" data-col="${t.col}" data-len="${Math.max(1, t.lexeme.length)}">
+        <td class="n">${i + 1}</td>
+        <td><span class="kind k-${kindCat(t.kind)}">${t.kind}</span></td>
+        <td>${t.kind === "EOF" ? '<span style="color:var(--faint)">⟨end of input⟩</span>' : esc(t.lexeme)}</td>
+        <td class="pos">${t.line}</td><td class="pos">${t.col}</td></tr>`);
+    });
+    $("tokRows").innerHTML = rows.join("") || `<tr><td colspan="5" class="empty">No matching tokens</td></tr>`;
+  }
+  $("tokFilter").addEventListener("input", renderTokens);
+  $("tokRows").addEventListener("click", (e) => {
+    const tr = e.target.closest("tr[data-line]");
+    if (tr) selectAt(+tr.dataset.line, +tr.dataset.col, +tr.dataset.len);
+  });
+
+  // ---- AST ----
+  const CATEGORY = { Binary: "expr", Unary: "expr", Number: "literal", Bool: "literal", Var: "var" };
+  const catOf = (node) => CATEGORY[node.type] || "stmt";
+
+  function splitLabel(label) {
+    const k = label.indexOf(" ");
+    return k < 0 ? [label, ""] : [label.slice(0, k), label.slice(k + 1)];
+  }
+
+  function treeHtml(node) {
+    const [head, val] = splitLabel(node.label);
+    const kids = node.children;
+    const twisty = kids.length ? "▾" : "•";
+    let html = `<li><div class="tnode" data-line="${node.line}" data-col="${node.col}">
+      <span class="twisty">${twisty}</span>
+      ${node.role ? `<span class="role">${esc(node.role)}</span>` : ""}
+      <span class="tlabel c-${catOf(node)}"><b>${esc(head)}</b>${val ? `<span class="tval">${esc(val)}</span>` : ""}</span>
+      <span class="tpos">${node.line}:${node.col}</span></div>`;
+    if (kids.length) html += `<ul>${kids.map(treeHtml).join("")}</ul>`;
+    return html + "</li>";
+  }
+
+  function graphSvg(root) {
+    const CH = 7.3, H = 28, GAP = 16, LEVEL = 74, M = 20;
+    let maxDepth = 0;
+    const nodes = [];
+
+    function shift(n, dx) { n.x += dx; n.kids.forEach((k) => shift(k, dx)); }
+    function build(src, depth) {
+      const n = { src, depth, w: Math.max(44, src.label.length * CH + 22), x: 0, kids: [] };
+      maxDepth = Math.max(maxDepth, depth);
+      nodes.push(n);
+      n.kids = src.children.map((c) => build(c, depth + 1));
+      return n;
+    }
+    // Lay out subtrees left to right; centre each parent above its children.
+    function place(n, x0) {
+      if (!n.kids.length) { n.x = x0 + n.w / 2; return n.w + GAP; }
+      let cursor = x0;
+      for (const k of n.kids) cursor += place(k, cursor);
+      const span = cursor - x0 - GAP;
+      if (n.w > span) { n.kids.forEach((k) => shift(k, (n.w - span) / 2)); cursor = x0 + n.w + GAP; }
+      n.x = (n.kids[0].x + n.kids[n.kids.length - 1].x) / 2;
+      return cursor - x0;
+    }
+    const tree = build(root, 0);
+    const width = place(tree, M) - GAP + M * 2;
+    const height = maxDepth * LEVEL + H + M * 2;
+    const yOf = (d) => M + d * LEVEL;
+
+    let edges = "", labels = "", boxes = "";
+    for (const n of nodes) {
+      const y = yOf(n.depth);
+      for (const k of n.kids) {
+        const y1 = y + H, y2 = yOf(k.depth), my = (y1 + y2) / 2;
+        edges += `<path class="g-edge" d="M${n.x},${y1} C${n.x},${my} ${k.x},${my} ${k.x},${y2}"/>`;
+        if (k.src.role) labels += `<text class="g-role" x="${(n.x + k.x) / 2}" y="${my + 3}" text-anchor="middle">${esc(k.src.role)}</text>`;
+      }
+      boxes += `<g class="g-node g-${catOf(n.src)}" data-line="${n.src.line}" data-col="${n.src.col}">
+        <title>${esc(n.src.type)} at ${n.src.line}:${n.src.col}</title>
+        <rect x="${n.x - n.w / 2}" y="${y}" width="${n.w}" height="${H}"/>
+        <text x="${n.x}" y="${y + H / 2 + 4}" text-anchor="middle">${esc(n.src.label)}</text></g>`;
+    }
+    const z = state.zoom;
+    return `<svg xmlns="http://www.w3.org/2000/svg" data-root-x="${tree.x * z}" width="${width * z}" height="${height * z}" viewBox="0 0 ${width} ${height}">${edges}${labels}${boxes}</svg>`;
+  }
+
+  function download(name, text) {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  async function copy(text, btn) {
+    try { await navigator.clipboard.writeText(text); btn.textContent = "Copied ✓"; }
+    catch { btn.textContent = "Copy failed"; }
+    setTimeout(() => (btn.textContent = btn.dataset.label), 1200);
+  }
+
+  function renderAst() {
+    const r = state.result;
+    if (!r) return;
+    const view = $("astView"), actions = $("astActions");
+    const baseName = ($("fileName").textContent || "ast").replace(/\.ml$/, "");
+    const btn = (id, label) => `<button class="btn small" id="${id}" data-label="${label}">${label}</button>`;
+
+    if (state.astView === "tree") {
+      actions.innerHTML = btn("expandAll", "Expand all") + btn("collapseAll", "Collapse all");
+      view.innerHTML = `<div class="tree"><ul>${treeHtml(r.ast)}</ul></div>`;
+      $("expandAll").onclick = () => view.querySelectorAll("li").forEach((li) => toggleLi(li, false));
+      $("collapseAll").onclick = () => view.querySelectorAll("li").forEach((li) => li.querySelector("ul") && toggleLi(li, true));
+    } else if (state.astView === "graph") {
+      actions.innerHTML = btn("zoomOut", "−") + btn("zoomReset", `${Math.round(state.zoom * 100)}%`) + btn("zoomIn", "+") + btn("dlSvg", "Download .svg");
+      view.innerHTML = `<div class="legend" style="margin-bottom:10px"><span class="l-stmt">statement</span><span class="l-expr">operator</span><span class="l-literal">literal</span><span class="l-var">variable</span></div>
+        <div class="graph-wrap">${graphSvg(r.ast)}</div>`;
+      const wrap = view.querySelector(".graph-wrap");
+      wrap.scrollLeft = +wrap.firstElementChild.dataset.rootX - wrap.clientWidth / 2;   // centre on the root
+      const setZoom = (z) => { state.zoom = Math.min(2.5, Math.max(0.3, z)); renderAst(); };
+      $("zoomIn").onclick = () => setZoom(state.zoom + 0.15);
+      $("zoomOut").onclick = () => setZoom(state.zoom - 0.15);
+      $("zoomReset").onclick = () => setZoom(1);
+      $("dlSvg").onclick = () => {
+        const svg = view.querySelector("svg").outerHTML.replace("<svg ", `<svg style="background:#101318;font-family:monospace" `);
+        const css = [...document.styleSheets[0].cssRules].filter((x) => /\.g-/.test(x.selectorText || "")).map((x) => x.cssText).join("\n")
+          .replace(/var\(--([\w-]+)\)/g, (_, v) => getComputedStyle(document.documentElement).getPropertyValue("--" + v).trim());
+        download(`${baseName}.svg`, svg.replace(/(<svg[^>]*>)/, `$1<style>${css}</style>`));
+      };
+    } else if (state.astView === "text") {
+      actions.innerHTML = btn("copyText", "Copy");
+      view.innerHTML = `<pre class="codebox">${esc(r.tree)}</pre>`;
+      $("copyText").onclick = (e) => copy(r.tree, e.target);
+    } else {
+      actions.innerHTML = btn("copyDot", "Copy") + btn("dlDot", "Download .dot");
+      view.innerHTML = `<pre class="codebox">${esc(r.dot)}</pre>
+        <p style="color:var(--muted);font-size:12.5px;margin-top:10px">Render with Graphviz: <code>dot -Tpng ${esc(baseName)}.dot -o ast.png</code>, or paste into any online Graphviz viewer.</p>`;
+      $("copyDot").onclick = (e) => copy(r.dot, e.target);
+      $("dlDot").onclick = () => download(`${baseName}.dot`, r.dot + "\n");
+    }
+  }
+
+  function toggleLi(li, collapse) {
+    li.classList.toggle("collapsed", collapse);
+    const tw = li.querySelector(":scope > .tnode .twisty");
+    if (li.querySelector(":scope > ul")) tw.textContent = collapse ? "▸" : "▾";
+  }
+
+  $("astView").addEventListener("click", (e) => {
+    const tw = e.target.closest(".twisty");
+    if (tw) {
+      const li = tw.closest("li");
+      if (li.querySelector(":scope > ul")) toggleLi(li, !li.classList.contains("collapsed"));
+      return;
+    }
+    const n = e.target.closest("[data-line]");
+    if (n) selectAt(+n.dataset.line, +n.dataset.col);
+  });
+
+  $("astSeg").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-view]");
+    if (!b) return;
+    state.astView = b.dataset.view;
+    $("astSeg").querySelectorAll("button").forEach((x) => x.classList.toggle("active", x === b));
+    renderAst();
+  });
+
+  // ---- diagnostics ----
+  function renderDiagnostics() {
+    const r = state.result;
+    const view = $("diagView");
+    if (!r.diagnostics.length) {
+      view.innerHTML = `<div class="empty ok"><span class="big">✓</span>No errors. Lexing, parsing and scope checks passed${r.executed ? " and the program ran" : ""}.</div>`;
+      return;
+    }
+    const byPhase = {};
+    r.diagnostics.forEach((d) => (byPhase[d.phase] = (byPhase[d.phase] || 0) + 1));
+    const all = r.diagnostics.map((d) => d.rendered).join("\n\n");
+    let html = `<div class="toolbar"><div class="summary">${Object.entries(byPhase)
+      .map(([p, c]) => `<span class="phase ph-${p}">${c} ${p}</span>`).join("")}</div>
+      <button class="btn small" id="copyDiag" data-label="Copy as text">Copy as text</button></div>`;
+
+    for (const d of r.diagnostics) {
+      const w = String(d.line).length;
+      const pad = " ".repeat(w);
+      html += `<div class="diag">
+        <div class="diag-head">
+          <span class="phase ph-${d.phase}">${d.phase}</span>
+          <span class="diag-msg">${esc(d.message)}</span>
+          <button class="loc" data-line="${d.line}" data-col="${d.col}" data-len="${d.length}">line ${d.line}, col ${d.col}</button>
+        </div>
+        <div class="snippet"><span class="ln">${pad} |</span>
+<span class="ln">${d.line} |</span> ${esc(d.source_line)}
+<span class="ln">${pad} |</span> <span class="caret">${esc(d.caret)}</span></div>
+        ${d.notes.length ? `<ul class="notes">${d.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
+      </div>`;
+    }
+    view.innerHTML = html;
+    $("copyDiag").onclick = (e) => copy(all, e.target);
+  }
+  $("diagView").addEventListener("click", (e) => {
+    const b = e.target.closest(".loc");
+    if (b) selectAt(+b.dataset.line, +b.dataset.col, +b.dataset.len);
+  });
+
+  // ---- output ----
+  function renderOutput() {
+    const r = state.result;
+    const view = $("outputView");
+    if (!r.executed) {
+      const n = r.stats.errors;
+      view.innerHTML = `<div class="empty"><span class="big">⏸</span>Not executed: fix ${n} compile error${n > 1 ? "s" : ""} first (see Diagnostics).</div>`;
+      return;
+    }
+    const rt = r.diagnostics.find((d) => d.phase === "runtime");
+    const lines = r.output.map((o, i) => `<div><span class="ln">${i + 1}</span><span>${esc(o)}</span></div>`).join("");
+    view.innerHTML = `<div class="console-head"><span>stdout · ${r.output.length} line${r.output.length === 1 ? "" : "s"}</span>
+        <span>run ${r.stats.timings_ms.run ?? 0} ms</span></div>
+      <div class="console">${lines || '<div><span class="ln"></span><span style="color:var(--faint)">(program produced no output)</span></div>'}
+      ${rt ? `<div><span class="ln">!</span><span class="rt">runtime error at ${rt.line}:${rt.col}: ${esc(rt.message)}</span></div>` : ""}</div>`;
+  }
+
+  // ---- tabs ----
+  $("tabs").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-tab]");
+    if (!b) return;
+    $("tabs").querySelectorAll("button").forEach((x) => x.classList.toggle("active", x === b));
+    document.querySelectorAll(".tab").forEach((t) => (t.hidden = t.id !== "tab-" + b.dataset.tab));
+    $("tabBody").scrollTop = 0;
+  });
+
+  // ------------------------------------------------------------------
+  // Boot
+  // ------------------------------------------------------------------
+  (async () => {
+    const samples = await loadSamples();
+    const saved = store.get();
+    if (saved !== null && saved.trim()) {
+      ta.value = saved;
+    } else {
+      const first = samples.find((s) => s.name === "factorial.ml") || samples[0];
+      ta.value = first ? first.source : "let x = 2 + 3 * 4;\nprint(x);\n";
+      if (first) { $("fileName").textContent = first.name; $("sampleSelect").value = first.name; }
+    }
+    renderHighlight();
+    compile();
+  })();
+})();
+</script>
+</body>
+</html>
