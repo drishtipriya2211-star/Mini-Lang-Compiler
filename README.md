@@ -4,22 +4,25 @@ MiniLang is a small imperative language with a hand-written compiler front-end i
 plus a FastAPI backend and a web UI for exploring each compilation stage.
 
 ```
-source ─▶ Lexer ─▶ tokens ─▶ Parser ─▶ AST ─▶ Semantic checks ─▶ text tree · DOT · interpreter
+source ─▶ Lexer ─▶ tokens ─▶ Parser ─▶ AST ─▶ Semantic (symbol table) ─▶ CodeGen ─▶ bytecode ─▶ Stack VM ─▶ output
 ```
 
 - **Lexer:** one regex of named groups, with line/column tracking and bad-character diagnostics.
 - **Parser:** recursive descent for statements and table-driven precedence climbing for expressions.
   Panic-mode error recovery lets it report every error in one run.
-- **Semantic analysis:** block scopes, declare-before-use, and no redeclaration in the same scope.
+- **Semantic analysis:** a scoped symbol table (type, slot, uses and assignments for each variable, plus shadowing),
+  declare-before-use, no redeclaration, static `int`/`bool` type checks, and unused-variable warnings.
 - **Visualisation:** an indented text tree and Graphviz DOT export. The UI also has an interactive tree and an SVG graph.
-- **Interpreter:** a tree-walking evaluator, so programs actually run.
+- **Bytecode compiler + stack VM:** the AST is compiled to stack-machine instructions (with back-patched jumps
+  and short-circuit `and`/`or`), which a virtual machine executes. A tree-walking interpreter is kept as a
+  second engine, and the tests check that both give identical output.
 - **Diagnostics:** rustc-style caret messages with the phase, line, column and helpful notes.
 
 ## Project layout
 
 ```
 Mini-Lang-Compiler/
-├── minilang.py          # the compiler: lexer, parser, AST, semantic, DOT, interpreter, CLI
+├── minilang.py          # the compiler: lexer, parser, AST, symbol table, DOT, codegen, VM, CLI
 ├── server.py            # FastAPI backend (also serves the UI)
 ├── static/index.html    # single-file frontend (no build step, works offline)
 ├── samples/*.ml         # sample programs
@@ -55,14 +58,17 @@ The interactive API docs (Swagger) are at **http://127.0.0.1:8000/docs**.
 | Editor | Syntax highlighting, line numbers, red squiggles and gutter dots on error lines. **Ctrl+Enter** compiles; with *Live compile* on, it recompiles as you type. |
 | **Tokens** | Kind, lexeme, line and column for each token. Filter the table, or click a row to jump to that token in the editor. |
 | **AST** | *Interactive* (collapsible) tree, *Graph* (SVG, zoomable and downloadable), *Text tree*, and *Graphviz DOT* (copy or download). |
-| **Diagnostics** | Every error with its phase badge, caret snippet and notes. Click the location to jump to it. |
-| **Output** | What the program prints, when it compiles without errors. |
+| **Symbols** | The scoped symbol table: every scope (global, block, if-then, else, while-body) and each variable's type, VM slot, declaration, uses, assignments and shadowing. Click a row to jump to the declaration. |
+| **Diagnostics** | Every error (red) and warning (amber) with its phase badge, caret snippet and notes. Click the location to jump to it. |
+| **Output** | *Console* shows what the program prints; *Bytecode* shows the compiled instructions with execution stats. The *Engine* selector switches between the stack VM and the tree-walking interpreter. |
 | **Architecture & Docs** | Pipeline, EBNF grammar, precedence table, error recovery and API reference. |
 
 ## Command line
 
 ```powershell
 python minilang.py samples\factorial.ml --tokens --tree --run
+python minilang.py samples\demo.ml --symbols --bytecode --run   # symbol table + VM bytecode
+python minilang.py samples\demo.ml --run --engine ast          # run on the tree-walker instead
 python minilang.py samples\errors.ml                 # shows every diagnostic
 python minilang.py samples\precedence.ml --dot ast.dot
 dot -Tpng ast.dot -o ast.png                         # if Graphviz is installed
@@ -99,18 +105,20 @@ Values are integers and booleans (`true` / `false`). Operators, from loosest to 
 
 | File | Demonstrates |
 |---|---|
-| `factorial.ml` | while loop, assignment (prints 120) |
+| `factorial.ml` | while loop, conditionals and logical operators (prints 120) |
 | `precedence.ml` | precedence and associativity of every operator level |
+| `errors.ml` | several syntax errors plus one lexical error, all reported in one run (panic-mode recovery) |
+| `demo.ml` | a tour of every feature: arithmetic, booleans, else-if, loops, scopes and shadowing, Fibonacci |
 | `elseif.ml` | `else if` chains as nested `if` statements |
 | `primes.ml` | nested loops, `and`, `%`, booleans |
-| `errors.ml` | several syntax errors plus one lexical error, all reported in one run (panic-mode recovery) |
 | `unclosed.ml` | unclosed `{` reported at the opening brace |
 | `scope.ml` | semantic errors: out-of-scope use, redeclaration, undeclared assignment |
 | `empty.ml` | an empty program is valid |
 
 ## API
 
-`POST /api/compile` with `{"source": "...", "filename": "x.ml", "run": true}` returns:
+`POST /api/compile` with `{"source": "...", "filename": "x.ml", "run": true, "engine": "vm"}` returns
+(`engine` is `"vm"` for the stack VM or `"ast"` for the tree-walker):
 
 ```json
 {
@@ -119,11 +127,15 @@ Values are integers and booleans (`true` / `false`). Operators, from loosest to 
   "ast": {"type": "Program", "label": "Program", "line": 1, "col": 1, "children": []},
   "tree": "Program\n└── ...",
   "dot": "digraph AST { ... }",
+  "symbols": {"scopes": [{"id": 0, "kind": "global", "depth": 0}],
+              "symbols": [{"name": "x", "type": "int", "slot": 0, "scope": "global", "uses": 1, "assignments": 0}]},
+  "bytecode": [{"addr": 0, "op": "CONST", "arg": "10", "comment": "", "line": 1, "col": 9}],
   "diagnostics": [{"phase": "syntax", "message": "expected ';' after let statement, found 'let'",
                    "line": 2, "col": 11, "length": 1, "source_line": "let x = 10",
                    "caret": "          ^", "notes": [], "rendered": "error[syntax]: ..."}],
   "executed": false,
   "output": null,
+  "vm": null,
   "stats": {"lines": 3, "tokens": 12, "ast_nodes": 5, "errors": 1, "timings_ms": {"lex": 0.02, "parse": 0.04}}
 }
 ```

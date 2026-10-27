@@ -91,21 +91,77 @@ class SemanticTests(unittest.TestCase):
         r = compile_("let x = 1; { let x = 2; print(x); } print(x);")
         self.assertEqual(r["output"], ["2", "1"])
 
+    def test_symbol_table(self):
+        r = compile_("let x = 1; while (x < 3) { let y = x * 2; x = x + 1; print(y); }")
+        syms = {s["name"]: s for s in r["symbols"]["symbols"]}
+        self.assertEqual(syms["x"]["type"], "int")
+        self.assertEqual(syms["x"]["scope"], "global")
+        self.assertEqual((syms["x"]["uses"], syms["x"]["assignments"]), (3, 1))
+        self.assertEqual(syms["y"]["scope"], "while-body @ line 1")
+        self.assertEqual(syms["y"]["depth"], 1)
+        self.assertNotEqual(syms["x"]["slot"], syms["y"]["slot"])
 
-class InterpreterTests(unittest.TestCase):
-    def test_samples_output(self):
-        expected = {
-            "factorial.ml": ["120"],
-            "precedence.ml": ["14", "20", "3", "4", "6", "true"],
-            "elseif.ml": ["3"],
-            "primes.ml": ["2", "3", "5", "7", "11", "13", "17", "19", "23", "29"],
-            "empty.ml": [],
-        }
-        for name, out in expected.items():
-            with self.subTest(name):
-                r = compile_((ROOT / "samples" / name).read_text())
-                self.assertTrue(r["success"], r["diagnostics"])
-                self.assertEqual(r["output"], out)
+    def test_shadowing_recorded(self):
+        r = compile_("let x = 1; { let x = true; print(x); } print(x);")
+        inner = r["symbols"]["symbols"][1]
+        self.assertEqual(inner["type"], "bool")
+        self.assertIn("global", inner["shadows"])
+
+    def test_type_errors(self):
+        msgs = [d["message"] for d in compile_("let b = true; let n = b + 1; n = false; print(n == b);")["diagnostics"]]
+        self.assertTrue(any("expects integers" in m for m in msgs))
+        self.assertTrue(any("cannot assign a bool" in m for m in msgs))
+        self.assertTrue(any("cannot compare" in m for m in msgs))
+
+    def test_unused_variable_is_only_a_warning(self):
+        r = compile_("let unused = 1; print(2);")
+        self.assertTrue(r["success"])
+        self.assertEqual(r["diagnostics"][0]["severity"], "warning")
+        self.assertEqual(r["output"], ["2"])
+
+
+class ExecutionTests(unittest.TestCase):
+    EXPECTED = {
+        "factorial.ml": ["120"],
+        "precedence.ml": ["14", "20", "3", "4", "6", "true"],
+        "elseif.ml": ["3"],
+        "primes.ml": ["2", "3", "5", "7", "11", "13", "17", "19", "23", "29"],
+        "demo.ml": ["27", "44", "3", "2", "-12", "true", "true", "2", "55", "100", "1",
+                    "0", "1", "1", "2", "3", "5", "8", "13", "21", "34"],
+        "empty.ml": [],
+    }
+
+    def test_samples_output_on_both_engines(self):
+        for name, out in self.EXPECTED.items():
+            src = (ROOT / "samples" / name).read_text()
+            for engine in minilang.ENGINES:
+                with self.subTest(name=name, engine=engine):
+                    r = minilang.compile_source(src, engine=engine)
+                    self.assertTrue(r["success"], r["diagnostics"])
+                    self.assertEqual(r["diagnostics"], [])
+                    self.assertEqual(r["output"], out)
+
+    def test_vm_and_interpreter_agree(self):
+        programs = [
+            "print(-7 / 2); print(-7 % 2); print(7 / -2);",
+            "let a = 0; print(a != 0 and 10 / a > 1); print(a == 0 or 1 / a > 0);",
+            "print(not 1 == 2); print(not (1 < 2) or false); print(-(3 - 5) * 2);",
+            "let i = 0; let s = 0; while (i < 50) { if (i % 3 == 0 or i % 5 == 0) { s = s + i; } i = i + 1; } print(s);",
+        ]
+        for src in programs:
+            with self.subTest(src=src):
+                vm = minilang.compile_source(src, engine="vm")
+                ast = minilang.compile_source(src, engine="ast")
+                self.assertEqual(vm["output"], ast["output"])
+
+    def test_bytecode_shape(self):
+        r = compile_("let x = 1; while (x < 3) { x = x + 1; }")
+        ops = [i["op"] for i in r["bytecode"]]
+        self.assertEqual(ops[-1], "HALT")
+        self.assertIn("JUMP_IF_FALSE", ops)
+        back = next(i for i in r["bytecode"] if i["op"] == "JUMP")
+        self.assertEqual(back["arg"], "-> 2")      # back-edge to the loop condition
+        self.assertGreater(r["vm"]["instructions_executed"], len(ops))
 
     def test_c_style_division(self):
         r = compile_("print(-7 / 2); print(-7 % 2);")

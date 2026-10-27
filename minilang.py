@@ -6,13 +6,16 @@ Pipeline:
       -> Lexer      (regex-based, tracks line/column)        -> tokens
       -> Parser     (recursive descent + table-driven         -> AST
                      precedence climbing, panic-mode recovery)
-      -> Semantic   (scope checking: declare-before-use,      -> diagnostics
-                     no redeclaration in the same scope)
+      -> Semantic   (scoped symbol table, declare-before-use, -> symbols + diagnostics
+                     no redeclaration, static type checks)
       -> Visualise  (indented text tree, Graphviz DOT)
-      -> Interpret  (tree-walking evaluator, optional)        -> program output
+      -> CodeGen    (AST -> stack-machine bytecode)           -> bytecode
+      -> VM         (stack-based virtual machine)             -> program output
+         (or the tree-walking Interpreter, with --engine ast)
 
 Usage (CLI):
     python minilang.py samples/factorial.ml --tokens --tree --run
+    python minilang.py samples/demo.ml --symbols --bytecode --run
     python minilang.py samples/errors.ml
     python minilang.py samples/precedence.ml --dot ast.dot
     python minilang.py samples/factorial.ml --json
@@ -575,107 +578,290 @@ class Parser:
 
 
 # ---------------------------------------------------------------------------
-# Semantic analysis: block scoping, declare-before-use, no redeclaration
+# Semantic analysis: scoped symbol table, declare-before-use, type checking
 # ---------------------------------------------------------------------------
+
+INT, BOOL, UNKNOWN = "int", "bool", "?"
+ARITHMETIC_OPS = {"+", "-", "*", "/", "%"}
+RELATIONAL_OPS = {"<", ">", "<=", ">="}
+EQUALITY_OPS = {"==", "!="}
+LOGICAL_OPS = {"and", "or"}
+
+
+@dataclass
+class Scope:
+    id: int
+    kind: str                 # global | block | if-then | else | while-body
+    line: int
+    parent: int | None
+    depth: int
+    symbols: dict = field(default_factory=dict)
+
+    @property
+    def name(self) -> str:
+        return "global" if self.kind == "global" else f"{self.kind} @ line {self.line}"
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "kind": self.kind, "name": self.name, "line": self.line,
+                "parent": self.parent, "depth": self.depth, "symbol_count": len(self.symbols)}
+
+
+@dataclass
+class Symbol:
+    name: str
+    type: str
+    slot: int                 # storage slot assigned for the VM
+    scope: Scope
+    line: int
+    col: int
+    uses: int = 0
+    assignments: int = 0
+    shadows: Symbol | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name, "type": self.type, "slot": self.slot,
+            "scope_id": self.scope.id, "scope": self.scope.name, "depth": self.scope.depth,
+            "line": self.line, "col": self.col, "uses": self.uses, "assignments": self.assignments,
+            "shadows": f"{self.shadows.scope.name} (line {self.shadows.line})" if self.shadows else None,
+        }
 
 
 class SemanticAnalyzer:
+    """Walks the AST with a stack of scopes.
+
+    Produces: diagnostics, a report of every scope/symbol, and `resolution`,
+    a map from each Let/Assign/Var node to the Symbol it refers to (used by
+    the code generator to emit slot numbers instead of names).
+    """
+
     def __init__(self):
-        self.scopes: list[dict[str, Token]] = []
+        self.scopes: list[Scope] = []        # every scope ever opened, for the report
+        self.stack: list[Scope] = []         # currently open scopes
+        self.symbols: list[Symbol] = []
+        self.resolution: dict[int, Symbol] = {}
         self.diagnostics: list[Diagnostic] = []
 
-    def error(self, line, col, length, message, notes=()):
-        self.diagnostics.append(Diagnostic("semantic", message, line, col, length, notes=list(notes)))
+    # -- helpers --------------------------------------------------------------
 
-    def lookup(self, name: str) -> Token | None:
-        for scope in reversed(self.scopes):
-            if name in scope:
-                return scope[name]
+    def error(self, line, col, length, message, notes=(), severity="error"):
+        self.diagnostics.append(Diagnostic("semantic", message, line, col, length,
+                                           severity=severity, notes=list(notes)))
+
+    def push(self, kind: str, line: int):
+        scope = Scope(len(self.scopes), kind, line,
+                      self.stack[-1].id if self.stack else None, len(self.stack))
+        self.scopes.append(scope)
+        self.stack.append(scope)
+
+    def pop(self):
+        self.stack.pop()
+
+    def lookup(self, name: str) -> Symbol | None:
+        for scope in reversed(self.stack):
+            if name in scope.symbols:
+                return scope.symbols[name]
         return None
 
+    def report(self) -> dict:
+        return {"scopes": [s.to_dict() for s in self.scopes],
+                "symbols": [s.to_dict() for s in self.symbols]}
+
+    # -- statements -------------------------------------------------------------
+
     def analyze(self, program: Program) -> list[Diagnostic]:
-        self.scopes = [{}]
+        self.push("global", 1)
         for stmt in program.statements:
             self.visit(stmt)
+        self.pop()
+        for sym in self.symbols:
+            if sym.uses == 0:
+                self.error(sym.line, sym.col, len(sym.name),
+                           f"variable '{sym.name}' is declared but never used", severity="warning")
         return self.diagnostics
 
-    def visit_scoped(self, node: Node):
-        # A non-block body such as `if (c) let x = 1;` still gets its own scope.
-        self.scopes.append({})
-        self.visit(node)
-        self.scopes.pop()
+    def visit_body(self, node: Node, kind: str):
+        # Every if/else/while body gets its own scope, even `if (c) let x = 1;`.
+        if isinstance(node, Block):
+            self.visit_block(node, kind)
+        else:
+            self.push(kind, node.line)
+            self.visit(node)
+            self.pop()
+
+    def visit_block(self, node: Block, kind: str = "block"):
+        self.push(kind, node.line)
+        for stmt in node.statements:
+            self.visit(stmt)
+        self.pop()
 
     def visit(self, node: Node):
         if isinstance(node, Block):
-            self.scopes.append({})
-            for stmt in node.statements:
-                self.visit(stmt)
-            self.scopes.pop()
+            self.visit_block(node)
         elif isinstance(node, Let):
-            self.visit(node.value)            # `let x = x;` uses the outer/undeclared x
+            value_type = self.type_of(node.value)     # `let x = x;` sees the outer/undeclared x
             name = node.name
-            previous = self.scopes[-1].get(name.lexeme)
+            previous = self.stack[-1].symbols.get(name.lexeme)
             if previous:
                 self.error(name.line, name.col, len(name.lexeme),
                            f"variable '{name.lexeme}' is already declared in this scope",
                            [f"previous declaration at line {previous.line}, column {previous.col}",
                             f"use '{name.lexeme} = ...;' to assign a new value"])
-            else:
-                self.scopes[-1][name.lexeme] = name
+                return
+            sym = Symbol(name.lexeme, value_type, len(self.symbols), self.stack[-1],
+                         name.line, name.col, shadows=self.lookup(name.lexeme))
+            self.stack[-1].symbols[name.lexeme] = sym
+            self.symbols.append(sym)
+            self.resolution[id(node)] = sym
         elif isinstance(node, Assign):
-            if not self.lookup(node.name.lexeme):
-                self.error(node.line, node.col, len(node.name.lexeme),
-                           f"assignment to undeclared variable '{node.name.lexeme}'",
-                           [f"declare it first with 'let {node.name.lexeme} = ...;'"])
-            self.visit(node.value)
-        elif isinstance(node, Var):
-            if not self.lookup(node.name):
-                self.error(node.line, node.col, len(node.name),
-                           f"use of undeclared variable '{node.name}'")
+            name = node.name.lexeme
+            sym = self.lookup(name)
+            value_type = self.type_of(node.value)
+            if not sym:
+                self.error(node.line, node.col, len(name),
+                           f"assignment to undeclared variable '{name}'",
+                           [f"declare it first with 'let {name} = ...;'"])
+                return
+            sym.assignments += 1
+            self.resolution[id(node)] = sym
+            if UNKNOWN not in (sym.type, value_type) and sym.type != value_type:
+                self.error(node.line, node.col, len(name),
+                           f"cannot assign a {value_type} value to '{name}', which has type {sym.type}",
+                           [f"'{name}' was declared at line {sym.line} with a {sym.type} value"])
+        elif isinstance(node, Print):
+            self.type_of(node.value)
         elif isinstance(node, If):
-            self.visit(node.condition)
-            self.visit_scoped(node.then_branch)
+            self.type_of(node.condition)
+            self.visit_body(node.then_branch, "if-then")
             if node.else_branch is not None:
-                self.visit_scoped(node.else_branch)
+                self.visit_body(node.else_branch, "else")
         elif isinstance(node, While):
-            self.visit(node.condition)
-            self.visit_scoped(node.body)
-        else:
-            for _, child in node.children():
-                self.visit(child)
+            self.type_of(node.condition)
+            self.visit_body(node.body, "while-body")
+
+    # -- expressions: resolve names and infer a static type ---------------------
+
+    def type_of(self, node: Node) -> str:
+        if isinstance(node, Number):
+            return INT
+        if isinstance(node, Bool):
+            return BOOL
+        if isinstance(node, Var):
+            sym = self.lookup(node.name)
+            if not sym:
+                self.error(node.line, node.col, len(node.name), f"use of undeclared variable '{node.name}'")
+                return UNKNOWN
+            sym.uses += 1
+            self.resolution[id(node)] = sym
+            return sym.type
+        if isinstance(node, Unary):
+            operand = self.type_of(node.operand)
+            if node.op == "not":
+                return BOOL
+            if operand == BOOL:
+                self.error(node.line, node.col, 1, "unary '-' expects an integer, got bool")
+            return INT
+        if isinstance(node, Binary):
+            left, right = self.type_of(node.left), self.type_of(node.right)
+            op = node.op
+            if op in LOGICAL_OPS:
+                return BOOL
+            if op in EQUALITY_OPS:
+                if UNKNOWN not in (left, right) and left != right:
+                    self.error(node.line, node.col, len(op), f"cannot compare {left} with {right} using '{op}'")
+                return BOOL
+            if BOOL in (left, right):
+                self.error(node.line, node.col, len(op), f"operator '{op}' expects integers, got bool",
+                           ["booleans only work with 'and', 'or', 'not', '==' and '!='"])
+            return BOOL if op in RELATIONAL_OPS else INT
+        return UNKNOWN
 
 
 # ---------------------------------------------------------------------------
-# Interpreter (tree-walking) - lets the review demo actually *run* programs
+# Runtime helpers shared by the tree-walking interpreter and the stack VM
 # ---------------------------------------------------------------------------
+
+
+class OperationError(Exception):
+    pass
 
 
 class MiniLangRuntimeError(Exception):
-    def __init__(self, node: Node, message: str):
+    def __init__(self, line: int, col: int, length: int, message: str):
         super().__init__(message)
-        self.node = node
-        self.message = message
+        self.line, self.col, self.length, self.message = line, col, length, message
+
+    @classmethod
+    def at(cls, node: Node, message: str) -> "MiniLangRuntimeError":
+        length = len(node.op) if isinstance(node, (Binary, Unary)) else 1
+        return cls(node.line, node.col, length, message)
+
+
+def truthy(value) -> bool:
+    return value is True or (not isinstance(value, bool) and value != 0)
+
+
+def format_value(value) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _same(a, b) -> bool:
+    return a == b and isinstance(a, bool) == isinstance(b, bool)
+
+
+def apply_unary(op: str, value):
+    if op == "not":
+        return not truthy(value)
+    if isinstance(value, bool):
+        raise OperationError("unary '-' expects an integer, got a boolean")
+    return -value
+
+
+def apply_binary(op: str, a, b):
+    """Every non-short-circuit binary operator."""
+    if op == "==":
+        return _same(a, b)
+    if op == "!=":
+        return not _same(a, b)
+    if isinstance(a, bool) or isinstance(b, bool):
+        raise OperationError(f"operator '{op}' expects integers, got a boolean")
+    if op == "+": return a + b
+    if op == "-": return a - b
+    if op == "*": return a * b
+    if op in ("/", "%"):
+        if b == 0:
+            raise OperationError("division by zero" if op == "/" else "modulo by zero")
+        q = abs(a) // abs(b) * (1 if (a >= 0) == (b >= 0) else -1)   # truncate toward zero, like C
+        return q if op == "/" else a - b * q
+    if op == "<": return a < b
+    if op == ">": return a > b
+    if op == "<=": return a <= b
+    if op == ">=": return a >= b
+    raise OperationError(f"unknown operator '{op}'")
+
+
+MAX_OUTPUT_LINES = 5_000
+
+
+# ---------------------------------------------------------------------------
+# Engine 1: tree-walking interpreter
+# ---------------------------------------------------------------------------
 
 
 class Interpreter:
     MAX_STEPS = 200_000
-    MAX_OUTPUT_LINES = 5_000
 
     def __init__(self):
         self.scopes: list[dict[str, int | bool]] = [{}]
         self.output: list[str] = []
         self.steps = 0
 
-    @staticmethod
-    def fmt(value) -> str:
-        if isinstance(value, bool):
-            return "true" if value else "false"
-        return str(value)
-
     def tick(self, node: Node):
         self.steps += 1
         if self.steps > self.MAX_STEPS:
-            raise MiniLangRuntimeError(node, f"execution exceeded {self.MAX_STEPS:,} steps (infinite loop?)")
+            raise MiniLangRuntimeError.at(node, f"execution exceeded {self.MAX_STEPS:,} steps (infinite loop?)")
 
     def run(self, program: Program) -> list[str]:
         for stmt in program.statements:
@@ -702,73 +888,227 @@ class Interpreter:
         elif isinstance(node, Assign):
             self.find_scope(node.name.lexeme)[node.name.lexeme] = self.evaluate(node.value)
         elif isinstance(node, Print):
-            if len(self.output) >= self.MAX_OUTPUT_LINES:
-                raise MiniLangRuntimeError(node, f"output exceeded {self.MAX_OUTPUT_LINES:,} lines")
-            self.output.append(self.fmt(self.evaluate(node.value)))
+            if len(self.output) >= MAX_OUTPUT_LINES:
+                raise MiniLangRuntimeError.at(node, f"output exceeded {MAX_OUTPUT_LINES:,} lines")
+            self.output.append(format_value(self.evaluate(node.value)))
         elif isinstance(node, Block):
-            self.scopes.append({})
-            try:
-                for stmt in node.statements:
-                    self.execute(stmt)
-            finally:
-                self.scopes.pop()
+            self.execute_scoped_block(node)
         elif isinstance(node, If):
-            if self.truthy(self.evaluate(node.condition)):
+            if truthy(self.evaluate(node.condition)):
                 self.execute_scoped(node.then_branch)
             elif node.else_branch is not None:
                 self.execute_scoped(node.else_branch)
         elif isinstance(node, While):
-            while self.truthy(self.evaluate(node.condition)):
+            while truthy(self.evaluate(node.condition)):
                 self.tick(node)
                 self.execute_scoped(node.body)
 
-    @staticmethod
-    def truthy(value) -> bool:
-        return value is True or (not isinstance(value, bool) and value != 0)
-
-    def expect_int(self, node: Node, op: str, *values):
-        for v in values:
-            if isinstance(v, bool):
-                raise MiniLangRuntimeError(node, f"operator '{op}' expects integers, got a boolean")
+    def execute_scoped_block(self, node: Block):
+        self.scopes.append({})
+        try:
+            for stmt in node.statements:
+                self.execute(stmt)
+        finally:
+            self.scopes.pop()
 
     def evaluate(self, node: Node):
-        if isinstance(node, Number):
-            return node.value
-        if isinstance(node, Bool):
+        if isinstance(node, (Number, Bool)):
             return node.value
         if isinstance(node, Var):
             return self.find_scope(node.name)[node.name]
-        if isinstance(node, Unary):
-            value = self.evaluate(node.operand)
-            if node.op == "not":
-                return not self.truthy(value)
-            self.expect_int(node, "-", value)
-            return -value
-        if isinstance(node, Binary):
-            op = node.op
-            if op == "and":
-                return self.truthy(self.evaluate(node.left)) and self.truthy(self.evaluate(node.right))
-            if op == "or":
-                return self.truthy(self.evaluate(node.left)) or self.truthy(self.evaluate(node.right))
-            a, b = self.evaluate(node.left), self.evaluate(node.right)
-            if op == "==":
-                return a == b and isinstance(a, bool) == isinstance(b, bool)
-            if op == "!=":
-                return not (a == b and isinstance(a, bool) == isinstance(b, bool))
-            self.expect_int(node, op, a, b)
-            if op == "+": return a + b
-            if op == "-": return a - b
-            if op == "*": return a * b
-            if op in ("/", "%"):
-                if b == 0:
-                    raise MiniLangRuntimeError(node, "division by zero" if op == "/" else "modulo by zero")
-                q = abs(a) // abs(b) * (1 if (a >= 0) == (b >= 0) else -1)  # truncate toward zero, like C
-                return q if op == "/" else a - b * q
-            if op == "<": return a < b
-            if op == ">": return a > b
-            if op == "<=": return a <= b
-            if op == ">=": return a >= b
-        raise MiniLangRuntimeError(node, f"cannot evaluate {node.label()}")
+        try:
+            if isinstance(node, Unary):
+                return apply_unary(node.op, self.evaluate(node.operand))
+            if isinstance(node, Binary):
+                if node.op == "and":
+                    return truthy(self.evaluate(node.left)) and truthy(self.evaluate(node.right))
+                if node.op == "or":
+                    return truthy(self.evaluate(node.left)) or truthy(self.evaluate(node.right))
+                return apply_binary(node.op, self.evaluate(node.left), self.evaluate(node.right))
+        except OperationError as e:
+            raise MiniLangRuntimeError.at(node, str(e)) from None
+        raise MiniLangRuntimeError.at(node, f"cannot evaluate {node.label()}")
+
+
+# ---------------------------------------------------------------------------
+# Engine 2: bytecode compiler + stack-based virtual machine
+# ---------------------------------------------------------------------------
+#
+#   CONST v       push constant v                LOAD s     push slot s
+#   STORE s       pop into slot s                PRINT      pop and print
+#   ADD SUB MUL DIV MOD LT GT LE GE EQ NE        pop b, pop a, push (a op b)
+#   NEG NOT       pop a, push (op a)             TO_BOOL    replace top with its truthiness
+#   JUMP t        pc = t                         HALT       stop
+#   JUMP_IF_FALSE t / JUMP_IF_TRUE t             pop; jump if falsy / truthy
+
+BINARY_OPCODES = {
+    "+": "ADD", "-": "SUB", "*": "MUL", "/": "DIV", "%": "MOD",
+    "<": "LT", ">": "GT", "<=": "LE", ">=": "GE", "==": "EQ", "!=": "NE",
+}
+OPCODE_OPERATORS = {v: k for k, v in BINARY_OPCODES.items()}
+JUMP_OPCODES = {"JUMP", "JUMP_IF_FALSE", "JUMP_IF_TRUE"}
+
+
+@dataclass
+class Instruction:
+    op: str
+    arg: object = None
+    line: int = 0
+    col: int = 0
+    length: int = 1
+    comment: str = ""
+
+    def to_dict(self, addr: int) -> dict:
+        if self.arg is None:
+            arg = ""
+        elif self.op in JUMP_OPCODES:
+            arg = f"-> {self.arg}"
+        elif self.op == "CONST":
+            arg = format_value(self.arg)
+        else:
+            arg = str(self.arg)
+        return {"addr": addr, "op": self.op, "arg": arg, "comment": self.comment,
+                "line": self.line, "col": self.col}
+
+
+class CodeGenerator:
+    """Compiles a semantically valid AST to stack-machine bytecode.
+
+    Names were already resolved by the SemanticAnalyzer, so every variable
+    access becomes a numbered slot: shadowed variables simply get different slots.
+    """
+
+    def __init__(self, resolution: dict[int, Symbol]):
+        self.resolution = resolution
+        self.code: list[Instruction] = []
+
+    def emit(self, op: str, arg=None, node: Node | None = None, comment: str = "") -> int:
+        length = len(node.op) if isinstance(node, (Binary, Unary)) else 1
+        self.code.append(Instruction(op, arg, node.line if node else 0, node.col if node else 0, length, comment))
+        return len(self.code) - 1
+
+    def patch(self, at: int):
+        """Point the jump at `at` to the next instruction to be emitted."""
+        self.code[at].arg = len(self.code)
+
+    def generate(self, program: Program) -> list[Instruction]:
+        for stmt in program.statements:
+            self.statement(stmt)
+        self.emit("HALT")
+        return self.code
+
+    def statement(self, node: Node):
+        if isinstance(node, (Let, Assign)):
+            self.expression(node.value)
+            sym = self.resolution[id(node)]
+            self.emit("STORE", sym.slot, node, f"{'let ' if isinstance(node, Let) else ''}{sym.name}")
+        elif isinstance(node, Print):
+            self.expression(node.value)
+            self.emit("PRINT", node=node)
+        elif isinstance(node, Block):
+            for stmt in node.statements:
+                self.statement(stmt)
+        elif isinstance(node, If):
+            self.expression(node.condition)
+            to_else = self.emit("JUMP_IF_FALSE", node=node, comment="if: skip then-branch")
+            self.statement(node.then_branch)
+            if node.else_branch is None:
+                self.patch(to_else)
+            else:
+                to_end = self.emit("JUMP", node=node, comment="if: skip else-branch")
+                self.patch(to_else)
+                self.statement(node.else_branch)
+                self.patch(to_end)
+        elif isinstance(node, While):
+            start = len(self.code)
+            self.expression(node.condition)
+            to_exit = self.emit("JUMP_IF_FALSE", node=node, comment="while: exit loop")
+            self.statement(node.body)
+            self.emit("JUMP", start, node, "while: back to condition")
+            self.patch(to_exit)
+
+    def expression(self, node: Node):
+        if isinstance(node, (Number, Bool)):
+            self.emit("CONST", node.value, node)
+        elif isinstance(node, Var):
+            sym = self.resolution[id(node)]
+            self.emit("LOAD", sym.slot, node, sym.name)
+        elif isinstance(node, Unary):
+            self.expression(node.operand)
+            self.emit("NOT" if node.op == "not" else "NEG", node=node)
+        elif isinstance(node, Binary) and node.op in LOGICAL_OPS:
+            # Short-circuit: `a and b` skips b when a is falsy; `a or b` when a is truthy.
+            self.expression(node.left)
+            jump = self.emit("JUMP_IF_FALSE" if node.op == "and" else "JUMP_IF_TRUE", node=node,
+                             comment=f"{node.op}: short-circuit")
+            self.expression(node.right)
+            self.emit("TO_BOOL", node=node)
+            to_end = self.emit("JUMP", node=node)
+            self.patch(jump)
+            self.emit("CONST", node.op == "or", node)
+            self.patch(to_end)
+        elif isinstance(node, Binary):
+            self.expression(node.left)
+            self.expression(node.right)
+            self.emit(BINARY_OPCODES[node.op], node=node)
+
+
+class VirtualMachine:
+    MAX_INSTRUCTIONS = 2_000_000
+
+    def __init__(self, code: list[Instruction], slot_count: int):
+        self.code = code
+        self.slots: list = [None] * slot_count
+        self.stack: list = []
+        self.output: list[str] = []
+        self.executed = 0
+        self.max_stack = 0
+
+    def run(self) -> list[str]:
+        code, stack, slots = self.code, self.stack, self.slots
+        pc = 0
+        while True:
+            ins = code[pc]
+            pc += 1
+            self.executed += 1
+            if self.executed > self.MAX_INSTRUCTIONS:
+                raise MiniLangRuntimeError(ins.line, ins.col, ins.length,
+                                           f"execution exceeded {self.MAX_INSTRUCTIONS:,} instructions (infinite loop?)")
+            op = ins.op
+            try:
+                if op == "CONST":
+                    stack.append(ins.arg)
+                elif op == "LOAD":
+                    stack.append(slots[ins.arg])
+                elif op == "STORE":
+                    slots[ins.arg] = stack.pop()
+                elif op == "PRINT":
+                    if len(self.output) >= MAX_OUTPUT_LINES:
+                        raise OperationError(f"output exceeded {MAX_OUTPUT_LINES:,} lines")
+                    self.output.append(format_value(stack.pop()))
+                elif op == "JUMP":
+                    pc = ins.arg
+                elif op == "JUMP_IF_FALSE":
+                    if not truthy(stack.pop()):
+                        pc = ins.arg
+                elif op == "JUMP_IF_TRUE":
+                    if truthy(stack.pop()):
+                        pc = ins.arg
+                elif op == "TO_BOOL":
+                    stack[-1] = truthy(stack[-1])
+                elif op == "NEG":
+                    stack[-1] = apply_unary("-", stack[-1])
+                elif op == "NOT":
+                    stack[-1] = apply_unary("not", stack[-1])
+                elif op == "HALT":
+                    return self.output
+                else:
+                    b = stack.pop()
+                    stack[-1] = apply_binary(OPCODE_OPERATORS[op], stack[-1], b)
+            except OperationError as e:
+                raise MiniLangRuntimeError(ins.line, ins.col, ins.length, str(e)) from None
+            if len(stack) > self.max_stack:
+                self.max_stack = len(stack)
 
 
 # ---------------------------------------------------------------------------
@@ -839,8 +1179,17 @@ def ast_to_dot(root: Node) -> str:
 # ---------------------------------------------------------------------------
 
 
-def compile_source(source: str, filename: str = "<input>", run: bool = True) -> dict:
-    """Run the full pipeline and return a JSON-serialisable result."""
+ENGINES = ("vm", "ast")
+
+
+def compile_source(source: str, filename: str = "<input>", run: bool = True, engine: str = "vm") -> dict:
+    """Run the full pipeline and return a JSON-serialisable result.
+
+    engine: "vm"  - compile to bytecode and run on the stack VM (default)
+            "ast" - run the tree-walking interpreter directly on the AST
+    """
+    if engine not in ENGINES:
+        raise ValueError(f"engine must be one of {ENGINES}")
     source = source.replace("\r\n", "\n")
     lines = source.split("\n")
     timings = {}
@@ -855,27 +1204,40 @@ def compile_source(source: str, filename: str = "<input>", run: bool = True) -> 
     diagnostics += parser.diagnostics
     timings["parse"] = time.perf_counter() - t
 
-    # Semantic checks on a partial (error-recovered) AST would mostly be noise.
+    # Semantic checks on a partial (error-recovered) AST would mostly be noise,
+    # so they only run once the AST was built without lexical/syntax errors.
+    analyzer = None
     if not diagnostics:
         t = time.perf_counter()
-        diagnostics += SemanticAnalyzer().analyze(program)
+        analyzer = SemanticAnalyzer()
+        diagnostics += analyzer.analyze(program)
         timings["semantic"] = time.perf_counter() - t
 
-    output, executed = None, False
-    if run and not diagnostics:
+    has_errors = any(d.severity == "error" for d in diagnostics)
+    bytecode = None
+    if analyzer and not has_errors:
         t = time.perf_counter()
-        interpreter = Interpreter()
+        bytecode = CodeGenerator(analyzer.resolution).generate(program)
+        timings["codegen"] = time.perf_counter() - t
+
+    output, executed, vm_stats = None, False, None
+    if run and bytecode is not None:
+        t = time.perf_counter()
         executed = True
+        runner = VirtualMachine(bytecode, len(analyzer.symbols)) if engine == "vm" else Interpreter()
         try:
-            interpreter.run(program)
+            runner.run() if engine == "vm" else runner.run(program)
         except MiniLangRuntimeError as e:
-            diagnostics.append(Diagnostic("runtime", e.message, e.node.line, e.node.col,
-                                          max(1, len(e.node.op) if isinstance(e.node, (Binary, Unary)) else 1)))
-        output = interpreter.output
+            diagnostics.append(Diagnostic("runtime", e.message, e.line, e.col, e.length))
+        output = runner.output
+        if engine == "vm":
+            vm_stats = {"instructions_executed": runner.executed, "max_stack_depth": runner.max_stack,
+                        "slots": len(runner.slots)}
         timings["run"] = time.perf_counter() - t
 
     diagnostics.sort(key=lambda d: (d.line, d.col))
     errors = [d for d in diagnostics if d.severity == "error"]
+    warnings = [d for d in diagnostics if d.severity == "warning"]
     return {
         "filename": filename,
         "success": not errors,
@@ -883,14 +1245,21 @@ def compile_source(source: str, filename: str = "<input>", run: bool = True) -> 
         "ast": program.to_dict(),
         "tree": ast_to_text(program),
         "dot": ast_to_dot(program),
+        "symbols": analyzer.report() if analyzer else None,
+        "bytecode": [ins.to_dict(i) for i, ins in enumerate(bytecode)] if bytecode is not None else None,
         "diagnostics": [d.to_dict(lines, filename) for d in diagnostics],
+        "engine": engine,
         "executed": executed,
         "output": output,
+        "vm": vm_stats,
         "stats": {
             "lines": len(lines),
             "tokens": len(tokens),
             "ast_nodes": program.count(),
+            "symbols": len(analyzer.symbols) if analyzer else 0,
+            "instructions": len(bytecode) if bytecode is not None else 0,
             "errors": len(errors),
+            "warnings": len(warnings),
             "timings_ms": {k: round(v * 1000, 3) for k, v in timings.items()},
         },
     }
@@ -902,7 +1271,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--tokens", action="store_true", help="print the token stream")
     ap.add_argument("--tree", action="store_true", help="print the AST as an indented tree")
     ap.add_argument("--dot", metavar="OUT", help="write the AST as Graphviz DOT to OUT")
+    ap.add_argument("--symbols", action="store_true", help="print the symbol table")
+    ap.add_argument("--bytecode", action="store_true", help="print the compiled stack-VM bytecode")
     ap.add_argument("--run", action="store_true", help="execute the program if it compiles")
+    ap.add_argument("--engine", choices=ENGINES, default="vm",
+                    help="execution engine: stack VM (default) or AST tree-walker")
     ap.add_argument("--json", action="store_true", help="print the full result as JSON")
     args = ap.parse_args(argv)
 
@@ -912,7 +1285,7 @@ def main(argv: list[str] | None = None) -> int:
         with open(args.file, encoding="utf-8") as f:
             source, name = f.read(), args.file
 
-    result = compile_source(source, name, run=args.run or args.json)
+    result = compile_source(source, name, run=args.run or args.json, engine=args.engine)
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return 0 if result["success"] else 1
@@ -922,8 +1295,20 @@ def main(argv: list[str] | None = None) -> int:
         for t in result["tokens"]:
             print(f"{t['kind']:<10} {t['lexeme']!r:<14} {t['line']}:{t['col']}")
         print()
-    if args.tree or not (args.tokens or args.dot or args.run):
+    if args.tree or not (args.tokens or args.dot or args.run or args.symbols or args.bytecode):
         print(result["tree"])
+        print()
+    if args.symbols and result["symbols"]:
+        print(f"{'NAME':<12} {'TYPE':<5} {'SLOT':<5} {'SCOPE':<24} {'DECL':<8} USES  ASSIGNS")
+        for s in result["symbols"]["symbols"]:
+            scope = "  " * s["depth"] + s["scope"]
+            print(f"{s['name']:<12} {s['type']:<5} {s['slot']:<5} {scope:<24} "
+                  f"{str(s['line']) + ':' + str(s['col']):<8} {s['uses']:<5} {s['assignments']}")
+        print()
+    if args.bytecode and result["bytecode"]:
+        for ins in result["bytecode"]:
+            comment = f"; {ins['comment']}" if ins["comment"] else ""
+            print(f"{ins['addr']:>4}  {ins['op']:<14} {ins['arg']:<8} {comment}")
         print()
     if args.dot:
         with open(args.dot, "w", encoding="utf-8") as f:
@@ -936,8 +1321,9 @@ def main(argv: list[str] | None = None) -> int:
 
     for d in result["diagnostics"]:
         print(d["rendered"], end="\n\n", file=sys.stderr)
-    n = result["stats"]["errors"]
-    print(f"{n} error(s)" if n else "compiled successfully", file=sys.stderr)
+    n, w = result["stats"]["errors"], result["stats"]["warnings"]
+    summary = f"{n} error(s)" if n else "compiled successfully"
+    print(summary + (f", {w} warning(s)" if w else ""), file=sys.stderr)
     return 0 if result["success"] else 1
 
 

@@ -5,6 +5,7 @@ Run:   python server.py          (then open http://127.0.0.1:8000)
 Docs:  http://127.0.0.1:8000/docs (interactive Swagger UI for the API)
 """
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,10 +17,12 @@ import minilang
 ROOT = Path(__file__).resolve().parent
 SAMPLES_DIR = ROOT / "samples"
 INDEX_HTML = ROOT / "static" / "index.html"
+# Shown first in the UI's sample dropdown, in this order.
+FEATURED_SAMPLES = ["factorial.ml", "precedence.ml", "errors.ml", "demo.ml"]
 
 app = FastAPI(
     title="MiniLang Compiler API",
-    description="Lexer, parser, AST, diagnostics and interpreter for the MiniLang language.",
+    description="Lexer, parser, AST, symbol table, bytecode compiler and stack VM for the MiniLang language.",
     version="1.0.0",
 )
 
@@ -31,6 +34,7 @@ class CompileRequest(BaseModel):
     source: str = Field(..., max_length=200_000, description="MiniLang source code")
     filename: str = Field("<editor>", max_length=200)
     run: bool = Field(True, description="Execute the program if it compiles without errors")
+    engine: Literal["vm", "ast"] = Field("vm", description="'vm' = bytecode on the stack VM, 'ast' = tree-walking interpreter")
 
 
 def sample_description(source: str) -> str:
@@ -42,16 +46,20 @@ def sample_description(source: str) -> str:
 
 @app.post("/api/compile")
 def compile_code(req: CompileRequest) -> dict:
-    """Run the source through lexer -> parser -> semantic analysis (-> interpreter)."""
-    return minilang.compile_source(req.source, req.filename, run=req.run)
+    """Lexer -> parser -> semantic analysis/symbol table -> bytecode -> stack VM."""
+    return minilang.compile_source(req.source, req.filename, run=req.run, engine=req.engine)
 
 
 @app.get("/api/samples")
 def list_samples() -> list[dict]:
+    paths = sorted(SAMPLES_DIR.glob("*.ml"),
+                   key=lambda p: (FEATURED_SAMPLES.index(p.name) if p.name in FEATURED_SAMPLES
+                                  else len(FEATURED_SAMPLES), p.name))
     samples = []
-    for path in sorted(SAMPLES_DIR.glob("*.ml")):
+    for path in paths:
         source = path.read_text(encoding="utf-8")
-        samples.append({"name": path.name, "description": sample_description(source), "source": source})
+        samples.append({"name": path.name, "description": sample_description(source), "source": source,
+                        "featured": path.name in FEATURED_SAMPLES})
     return samples
 
 

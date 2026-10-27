@@ -160,6 +160,15 @@
     text-underline-offset: 3px; background: var(--red-soft);
   }
   .err-eol { background: var(--red); opacity: .55; border-radius: 2px; }
+  .warn-mark {
+    text-decoration: underline wavy var(--amber); text-decoration-skip-ink: none;
+    text-underline-offset: 3px; background: rgba(184,110,0,.08);
+  }
+  .gutter-inner div.warn { color: var(--amber); font-weight: 700; }
+  .gutter-inner div.warn::before {
+    content: ""; position: absolute; left: 6px; top: 7px; width: 7px; height: 7px;
+    border-radius: 50%; background: var(--amber);
+  }
 
   .statusbar {
     display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;
@@ -185,6 +194,7 @@
   }
   .badge.err { background: var(--red); color: #fff; }
   .badge.ok { background: rgba(19,138,85,.12); color: var(--green); }
+  .badge.warn { background: var(--amber); color: #fff; }
   .tab-body { flex: 1; min-height: 0; overflow: auto; }
   .tab { padding: 14px 16px 22px; }
   .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
@@ -267,6 +277,7 @@
   .legend .l-expr::before { background: var(--pink); }
   .legend .l-literal::before { background: var(--green); }
   .legend .l-var::before { background: var(--amber); }
+  .legend .l-jump::before { background: var(--violet); }
 
   /* ---------- diagnostics ---------- */
   .diag {
@@ -279,6 +290,33 @@
   .ph-syntax { background: var(--red-soft); color: var(--red); }
   .ph-semantic { background: rgba(196,161,255,.16); color: var(--violet); }
   .ph-runtime { background: rgba(249,168,212,.16); color: var(--pink); }
+  .ph-warning { background: rgba(184,110,0,.12); color: var(--amber); }
+  .diag.warn {
+    border-color: rgba(184,110,0,.25); border-left-color: var(--amber);
+    background: linear-gradient(rgba(184,110,0,.07), transparent 70%);
+  }
+  .diag.warn .snippet .caret { color: var(--amber); }
+
+  /* ---------- symbols ---------- */
+  tbody tr.scope-row { cursor: default; }
+  tbody tr.scope-row:hover { background: none; }
+  .scope-row td { background: var(--panel-2); font-family: var(--sans); }
+  .scope-kind { font: 600 12.5px var(--mono); color: var(--accent); }
+  .scope-meta { color: var(--muted); font-size: 12px; margin-left: 6px; }
+  .note-chip { font: 600 11px var(--sans); padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+  .note-chip.shadow { background: var(--pink-soft); color: var(--pink); }
+  .note-chip.unused { background: rgba(184,110,0,.1); color: var(--amber); }
+  .hint { font-size: 12px; color: var(--faint); }
+
+  /* ---------- bytecode ---------- */
+  .engine { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); }
+  .engine select { padding: 5px 10px; }
+  .op { font: 600 11.5px var(--mono); padding: 2px 8px; border-radius: 5px; }
+  .op-stack { background: var(--accent-soft); color: var(--accent); }
+  .op-alu { background: var(--pink-soft); color: var(--pink); }
+  .op-jump { background: rgba(138,63,209,.09); color: var(--violet); }
+  .op-io { background: rgba(19,138,85,.1); color: var(--green); }
+  td.cmt { color: var(--faint); font-style: italic; }
   .diag-msg { flex: 1; min-width: 200px; font-weight: 550; }
   .loc {
     background: none; border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px;
@@ -340,7 +378,7 @@
     <div class="logo">ML</div>
     <div>
       <h1>MiniLang Compiler</h1>
-      <p>Lexer · recursive-descent parser · AST · diagnostics · interpreter</p>
+      <p>Lexer · recursive-descent parser · AST · symbol table · bytecode · stack VM</p>
     </div>
   </div>
 </header>
@@ -384,6 +422,7 @@
     <nav class="tabs" id="tabs">
       <button data-tab="tokens" class="active">Tokens <span class="badge" id="tokBadge">0</span></button>
       <button data-tab="ast">AST <span class="badge" id="astBadge">0</span></button>
+      <button data-tab="symbols">Symbols <span class="badge" id="symBadge">0</span></button>
       <button data-tab="diag">Diagnostics <span class="badge" id="diagBadge">0</span></button>
       <button data-tab="output">Output</button>
       <button data-tab="docs">Architecture &amp; Docs</button>
@@ -416,11 +455,27 @@
         <div id="astView"></div>
       </div>
 
+      <div class="tab" id="tab-symbols" hidden>
+        <div id="symbolsView"></div>
+      </div>
+
       <div class="tab" id="tab-diag" hidden>
         <div id="diagView"></div>
       </div>
 
       <div class="tab" id="tab-output" hidden>
+        <div class="toolbar">
+          <div class="seg" id="outSeg">
+            <button data-view="console" class="active">Console</button>
+            <button data-view="bytecode">Bytecode</button>
+          </div>
+          <label class="engine">Engine
+            <select id="engineSelect">
+              <option value="vm">Stack VM (bytecode)</option>
+              <option value="ast">Tree-walking interpreter</option>
+            </select>
+          </label>
+        </div>
         <div id="outputView"></div>
       </div>
 
@@ -437,11 +492,14 @@
             <div class="stage"><div class="s-name">Parser</div><div class="s-out">AST</div>
               <div class="s-desc">Recursive descent for statements, precedence climbing for expressions, panic-mode recovery.</div></div>
             <div class="arrow">→</div>
-            <div class="stage"><div class="s-name">Semantic</div><div class="s-out">scope errors</div>
-              <div class="s-desc">Block scopes: declare-before-use, no redeclaration in the same scope.</div></div>
+            <div class="stage"><div class="s-name">Semantic</div><div class="s-out">symbol table</div>
+              <div class="s-desc">Scoped symbol table, declare-before-use, no redeclaration, static int/bool type checks.</div></div>
             <div class="arrow">→</div>
-            <div class="stage"><div class="s-name">Back-ends</div><div class="s-out">tree · DOT · run</div>
-              <div class="s-desc">Indented text tree, Graphviz DOT export and a tree-walking interpreter.</div></div>
+            <div class="stage"><div class="s-name">CodeGen</div><div class="s-out">bytecode</div>
+              <div class="s-desc">AST → stack-machine instructions. Names become slots; jumps are back-patched.</div></div>
+            <div class="arrow">→</div>
+            <div class="stage"><div class="s-name">Stack VM</div><div class="s-out">output</div>
+              <div class="s-desc">Fetch–decode–execute loop over an operand stack; collects print() output.</div></div>
           </div>
 
           <h2><span class="num">02</span> Grammar (EBNF)</h2>
@@ -506,37 +564,76 @@
             <li>Two value types: <b>integers</b> and <b>booleans</b>. Arithmetic needs integers. <code>/</code> and <code>%</code> truncate toward zero, as in C.</li>
             <li><code>{ }</code> opens a new scope. The body of an <code>if</code> or <code>while</code> always gets its own scope.</li>
             <li>A variable must be declared with <code>let</code> before use, and cannot be redeclared in the same scope. Inner scopes may shadow outer ones.</li>
+            <li><b>Static types:</b> each variable's type (<code>int</code> or <code>bool</code>) is inferred from its initialiser. Assigning a value of the other type, using arithmetic on booleans, or comparing an int with a bool is a semantic error.</li>
+            <li>A variable that is declared but never read gets a <b>warning</b>. Warnings don't stop the program from running.</li>
+            <li>The <b>symbol table</b> records every scope (global, block, if-then, else, while-body) and, for each variable, its type, VM slot, declaration position, number of reads and assignments, and any outer variable it shadows.</li>
             <li>Conditions accept booleans or integers (non-zero is true). <code>and</code> / <code>or</code> short-circuit.</li>
             <li>The interpreter stops after 200,000 steps to guard against infinite loops.</li>
           </ul>
 
-          <h2><span class="num">07</span> Implementation map (<code>minilang.py</code>)</h2>
+          <h2><span class="num">07</span> Bytecode &amp; stack VM</h2>
+          <p>After semantic analysis, <code>CodeGenerator</code> walks the AST and emits instructions for a stack machine. Each variable was already resolved to a numbered <em>slot</em>, so a shadowed variable simply gets a different slot. Forward jumps are emitted with a placeholder and <em>back-patched</em> once the target address is known. <code>and</code> / <code>or</code> compile to conditional jumps, which gives short-circuit evaluation for free.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Instruction</th><th>Effect</th></tr></thead>
+              <tbody>
+                <tr><td><code>CONST v</code> · <code>LOAD s</code> · <code>STORE s</code></td><td>push a constant · push slot <code>s</code> · pop into slot <code>s</code></td></tr>
+                <tr><td><code>ADD SUB MUL DIV MOD</code></td><td>pop <code>b</code>, pop <code>a</code>, push <code>a op b</code> (division truncates toward zero)</td></tr>
+                <tr><td><code>LT GT LE GE EQ NE</code></td><td>pop two operands, push a boolean</td></tr>
+                <tr><td><code>NEG</code> · <code>NOT</code> · <code>TO_BOOL</code></td><td>replace the top of the stack with <code>-a</code> · <code>not a</code> · its truthiness</td></tr>
+                <tr><td><code>JUMP t</code></td><td>continue at address <code>t</code></td></tr>
+                <tr><td><code>JUMP_IF_FALSE t</code> · <code>JUMP_IF_TRUE t</code></td><td>pop; jump if falsy · truthy</td></tr>
+                <tr><td><code>PRINT</code> · <code>HALT</code></td><td>pop and append to output · stop</td></tr>
+              </tbody>
+            </table>
+          </div>
+<pre class="codebox" style="margin-top:10px"><span class="cm">-- while (i &lt;= n) { i = i + 1; }  compiles to:</span>
+ 6  LOAD 2            <span class="cm">; i</span>
+ 7  LOAD 0            <span class="cm">; n</span>
+ 8  LE
+ 9  JUMP_IF_FALSE -&gt; 15
+10  LOAD 2
+11  CONST 1
+12  ADD
+13  STORE 2           <span class="cm">; i</span>
+14  JUMP -&gt; 6         <span class="cm">; back to the condition</span>
+15  …</pre>
+          <p>The VM stops after 2,000,000 instructions to guard against infinite loops. The original tree-walking interpreter is still available (<em>Engine</em> selector in the Output tab), and the tests check that both engines produce identical output.</p>
+
+          <h2><span class="num">08</span> Implementation map (<code>minilang.py</code>)</h2>
           <div class="table-wrap">
             <table>
               <tbody>
                 <tr><td><code>tokenize()</code></td><td>Regex lexer with <code>TOKEN_SPEC</code> named groups and line/column tracking</td></tr>
                 <tr><td><code>Parser</code></td><td>Recursive descent; <code>expression()</code> uses <code>BINARY_PRECEDENCE</code>; <code>synchronize()</code> does panic mode</td></tr>
                 <tr><td><code>Program, Let, If, Binary, …</code></td><td>AST node dataclasses with <code>children()</code> and <code>to_dict()</code></td></tr>
-                <tr><td><code>SemanticAnalyzer</code></td><td>Scope stack; undeclared use and redeclaration checks</td></tr>
+                <tr><td><code>SemanticAnalyzer</code>, <code>Scope</code>, <code>Symbol</code></td><td>Scoped symbol table; name resolution, type inference and checks, unused warnings</td></tr>
                 <tr><td><code>ast_to_text()</code> / <code>ast_to_dot()</code></td><td>Indented tree and Graphviz DOT visualisation</td></tr>
-                <tr><td><code>Interpreter</code></td><td>Tree-walking evaluator that produces program output</td></tr>
+                <tr><td><code>CodeGenerator</code></td><td>AST → bytecode with back-patched jumps</td></tr>
+                <tr><td><code>VirtualMachine</code></td><td>Stack-based VM that executes the bytecode</td></tr>
+                <tr><td><code>Interpreter</code></td><td>Alternative tree-walking engine, used to cross-check the VM</td></tr>
                 <tr><td><code>compile_source()</code></td><td>Runs the whole pipeline and returns JSON; used by both the CLI and the API</td></tr>
               </tbody>
             </table>
           </div>
 
-          <h2><span class="num">08</span> REST API</h2>
+          <h2><span class="num">09</span> REST API</h2>
 <pre class="codebox">POST /api/compile
-{ "source": "let x = 2 + 3;\nprint(x);", "filename": "demo.ml", "run": true }
+{ "source": "let x = 2 + 3;\nprint(x);", "filename": "demo.ml", "run": true, "engine": "vm" }
 
 → { "success": true,
     "tokens":      [{ "kind": "LET", "lexeme": "let", "line": 1, "col": 1 }, …],
     "ast":         { "type": "Program", "children": [ … ] },
     "tree":        "Program\n└── Let x\n    └── value: BinOp + …",
     "dot":         "digraph AST { … }",
+    "symbols":     { "scopes":  [{ "id": 0, "kind": "global", … }],
+                     "symbols": [{ "name": "x", "type": "int", "slot": 0, "scope": "global",
+                                   "line": 1, "col": 5, "uses": 1, "assignments": 0 }] },
+    "bytecode":    [{ "addr": 0, "op": "CONST", "arg": "2" }, …, { "op": "HALT" }],
     "diagnostics": [{ "phase": "syntax", "message": "…", "line": 2, "col": 9,
                       "source_line": "…", "caret": "        ^", "rendered": "…" }],
     "output":      ["5"],
+    "vm":          { "instructions_executed": 7, "max_stack_depth": 2, "slots": 1 },
     "stats":       { "tokens": 12, "ast_nodes": 6, "errors": 0, "timings_ms": { … } } }
 
 GET /api/samples       built-in sample programs
@@ -556,7 +653,10 @@ GET /docs              interactive Swagger UI</pre>
   const $ = (id) => document.getElementById(id);
   const ta = $("source"), hl = $("highlight"), gutter = $("gutter");
 
-  const state = { result: null, astView: "tree", zoom: 1, seq: 0, timer: null, diagRanges: [] };
+  const state = {
+    result: null, astView: "tree", outView: "console", engine: "vm",
+    zoom: 1, seq: 0, timer: null, diagRanges: [],
+  };
 
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const store = {
@@ -613,7 +713,8 @@ GET /docs              interactive Swagger UI</pre>
       const le = d.line < starts.length ? starts[d.line] - 1 : n;
       const s = ls + d.col - 1;
       if (s >= le) { eol.add(d.line); continue; }
-      for (let i = s; i < Math.min(s + d.length, le); i++) err[i] = 1;
+      const sev = d.severity === "warning" ? 2 : 1;      // 1 = error, 2 = warning; errors win
+      for (let i = s; i < Math.min(s + d.length, le); i++) err[i] = err[i] === 1 ? 1 : sev;
     }
 
     let html = "", line = 1, i = 0;
@@ -625,18 +726,23 @@ GET /docs              interactive Swagger UI</pre>
       let j = i;
       while (j < n && src[j] !== "\n" && cls[j] === cls[i] && err[j] === err[i]) j++;
       const text = esc(src.slice(i, j));
-      const classes = [cls[i] ? "t-" + cls[i] : "", err[i] ? "err-mark" : ""].filter(Boolean).join(" ");
+      const mark = err[i] === 1 ? "err-mark" : err[i] === 2 ? "warn-mark" : "";
+      const classes = [cls[i] ? "t-" + cls[i] : "", mark].filter(Boolean).join(" ");
       html += classes ? `<span class="${classes}">${text}</span>` : text;
       i = j;
     }
     if (eol.has(line)) html += '<span class="err-eol"> </span>';
     hl.innerHTML = html + "\n";
 
-    const errLines = new Map();
-    for (const d of state.diagRanges) if (!errLines.has(d.line)) errLines.set(d.line, d.message);
+    const marked = new Map();     // line -> { cls, message }; an error outranks a warning
+    for (const d of state.diagRanges) {
+      const cls = d.severity === "warning" ? "warn" : "err";
+      if (!marked.has(d.line) || (cls === "err" && marked.get(d.line).cls === "warn")) marked.set(d.line, { cls, message: d.message });
+    }
     let g = "";
     for (let k = 1; k <= starts.length; k++) {
-      g += errLines.has(k) ? `<div class="err" title="${esc(errLines.get(k))}">${k}</div>` : `<div>${k}</div>`;
+      const m = marked.get(k);
+      g += m ? `<div class="${m.cls}" title="${esc(m.message)}">${k}</div>` : `<div>${k}</div>`;
     }
     gutter.innerHTML = g;
     syncScroll();
@@ -721,7 +827,7 @@ GET /docs              interactive Swagger UI</pre>
       const res = await fetch(`${API}/api/compile`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ source, filename: $("fileName").textContent, run: true }),
+        body: JSON.stringify({ source, filename: $("fileName").textContent, run: true, engine: state.engine }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
       const result = await res.json();
@@ -743,12 +849,19 @@ GET /docs              interactive Swagger UI</pre>
       const res = await fetch(`${API}/api/samples`);
       const samples = await res.json();
       const sel = $("sampleSelect");
+      const groups = {};
       for (const s of samples) {
+        const label = s.featured ? "Featured" : "More samples";
+        if (!groups[label]) {
+          groups[label] = document.createElement("optgroup");
+          groups[label].label = label;
+          sel.appendChild(groups[label]);
+        }
         const opt = document.createElement("option");
         opt.value = s.name;
         opt.textContent = s.description ? `${s.name} - ${s.description}` : s.name;
         opt.dataset.source = s.source;
-        sel.appendChild(opt);
+        groups[label].appendChild(opt);
       }
       return samples;
     } catch {
@@ -774,19 +887,22 @@ GET /docs              interactive Swagger UI</pre>
   // ------------------------------------------------------------------
   function renderAll() {
     const r = state.result;
-    const errs = r.stats.errors;
+    const errs = r.stats.errors, warns = r.stats.warnings;
+    const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
     $("statusPill").className = "pill " + (errs ? "err" : "ok");
-    $("statusPill").textContent = errs ? `✕ ${errs} error${errs > 1 ? "s" : ""}` : "✓ compiled";
+    $("statusPill").textContent = errs ? `✕ ${plural(errs, "error")}`
+      : "✓ compiled" + (warns ? ` · ${plural(warns, "warning")}` : "");
     const t = r.stats.timings_ms;
     const total = Object.values(t).reduce((a, b) => a + b, 0);
     $("stats").textContent = `${r.stats.lines} lines · ${r.stats.tokens} tokens · ${r.stats.ast_nodes} nodes · ${total.toFixed(2)} ms`;
     $("tokBadge").textContent = r.stats.tokens;
     $("astBadge").textContent = r.stats.ast_nodes;
     $("diagBadge").textContent = r.diagnostics.length;
-    $("diagBadge").className = "badge " + (r.diagnostics.length ? "err" : "ok");
+    $("diagBadge").className = "badge " + (errs ? "err" : warns ? "warn" : "ok");
     renderHighlight();
     renderTokens();
     renderAst();
+    renderSymbols();
     renderDiagnostics();
     renderOutput();
   }
@@ -968,6 +1084,59 @@ GET /docs              interactive Swagger UI</pre>
     renderAst();
   });
 
+  // ---- symbols ----
+  function renderSymbols() {
+    const r = state.result;
+    const view = $("symbolsView");
+    $("symBadge").textContent = r.stats.symbols;
+    if (!r.symbols) {
+      const n = r.stats.errors;
+      view.innerHTML = `<div class="empty"><span class="big">⌗</span>The symbol table is built once the program parses cleanly.<br>Fix ${n} lexical/syntax error${n > 1 ? "s" : ""} first (see Diagnostics).</div>`;
+      return;
+    }
+    const { scopes, symbols } = r.symbols;
+    const typeName = (t) => (t === "?" ? "unknown" : t);
+    const byScope = new Map(scopes.map((s) => [s.id, []]));
+    symbols.forEach((s) => byScope.get(s.scope_id).push(s));
+    const types = {};
+    symbols.forEach((s) => (types[s.type] = (types[s.type] || 0) + 1));
+
+    let rows = "";
+    for (const sc of scopes) {
+      const pad = sc.depth * 20;
+      const where = sc.kind === "global" ? "" : ` · line ${sc.line}`;
+      rows += `<tr class="scope-row"><td colspan="7" style="padding-left:${12 + pad}px">
+        <span class="scope-kind">${sc.depth ? "└ " : ""}${esc(sc.kind)}</span>
+        <span class="scope-meta">scope #${sc.id}${where} · ${sc.symbol_count} symbol${sc.symbol_count === 1 ? "" : "s"}</span></td></tr>`;
+      for (const s of byScope.get(sc.id)) {
+        const notes = [];
+        if (s.shadows) notes.push(`<span class="note-chip shadow">shadows ${esc(s.shadows)}</span>`);
+        if (!s.uses) notes.push(`<span class="note-chip unused">unused</span>`);
+        const kind = s.type === "int" ? "k-num" : s.type === "bool" ? "k-kw" : "k-eof";
+        rows += `<tr data-line="${s.line}" data-col="${s.col}" data-len="${s.name.length}">
+          <td style="padding-left:${30 + pad}px"><b>${esc(s.name)}</b></td>
+          <td><span class="kind ${kind}">${typeName(s.type)}</span></td>
+          <td class="pos">${s.slot}</td>
+          <td class="pos">${s.line}:${s.col}</td>
+          <td class="pos">${s.uses}</td>
+          <td class="pos">${s.assignments}</td>
+          <td>${notes.join(" ")}</td></tr>`;
+      }
+    }
+    view.innerHTML = `<div class="toolbar"><div class="summary">
+        <span class="chip">${symbols.length} symbol${symbols.length === 1 ? "" : "s"}</span>
+        <span class="chip">${scopes.length} scope${scopes.length === 1 ? "" : "s"}</span>
+        ${Object.entries(types).map(([t, c]) => `<span class="chip">${c} ${typeName(t)}</span>`).join("")}
+      </div><span class="hint">Click a row to jump to its declaration</span></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Name</th><th>Type</th><th>Slot</th><th>Declared</th><th>Uses</th><th>Assigns</th><th>Notes</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>`;
+  }
+  $("symbolsView").addEventListener("click", (e) => {
+    const tr = e.target.closest("tr[data-line]");
+    if (tr) selectAt(+tr.dataset.line, +tr.dataset.col, +tr.dataset.len);
+  });
+
   // ---- diagnostics ----
   function renderDiagnostics() {
     const r = state.result;
@@ -986,9 +1155,11 @@ GET /docs              interactive Swagger UI</pre>
     for (const d of r.diagnostics) {
       const w = String(d.line).length;
       const pad = " ".repeat(w);
-      html += `<div class="diag">
+      const warn = d.severity === "warning";
+      html += `<div class="diag${warn ? " warn" : ""}">
         <div class="diag-head">
           <span class="phase ph-${d.phase}">${d.phase}</span>
+          ${warn ? '<span class="phase ph-warning">warning</span>' : ""}
           <span class="diag-msg">${esc(d.message)}</span>
           <button class="loc" data-line="${d.line}" data-col="${d.col}" data-len="${d.length}">line ${d.line}, col ${d.col}</button>
         </div>
@@ -1006,10 +1177,18 @@ GET /docs              interactive Swagger UI</pre>
     if (b) selectAt(+b.dataset.line, +b.dataset.col, +b.dataset.len);
   });
 
-  // ---- output ----
+  // ---- output: console + bytecode ----
+  const OP_CLASS = {
+    CONST: "stack", LOAD: "stack", STORE: "stack",
+    JUMP: "jump", JUMP_IF_FALSE: "jump", JUMP_IF_TRUE: "jump",
+    PRINT: "io", HALT: "io",
+  };
+
   function renderOutput() {
     const r = state.result;
+    if (!r) return;
     const view = $("outputView");
+    if (state.outView === "bytecode") { renderBytecode(r, view); return; }
     if (!r.executed) {
       const n = r.stats.errors;
       view.innerHTML = `<div class="empty"><span class="big">⏸</span>Not executed: fix ${n} compile error${n > 1 ? "s" : ""} first (see Diagnostics).</div>`;
@@ -1017,11 +1196,54 @@ GET /docs              interactive Swagger UI</pre>
     }
     const rt = r.diagnostics.find((d) => d.phase === "runtime");
     const lines = r.output.map((o, i) => `<div><span class="ln">${i + 1}</span><span>${esc(o)}</span></div>`).join("");
-    view.innerHTML = `<div class="console-head"><span>stdout · ${r.output.length} line${r.output.length === 1 ? "" : "s"}</span>
+    const engine = r.engine === "vm" ? "stack VM" : "tree-walking interpreter";
+    const vm = r.vm ? ` · ${r.vm.instructions_executed.toLocaleString()} instructions executed · max stack depth ${r.vm.max_stack_depth}` : "";
+    view.innerHTML = `<div class="console-head"><span>stdout · ${r.output.length} line${r.output.length === 1 ? "" : "s"} · ${engine}${vm}</span>
         <span>run ${r.stats.timings_ms.run ?? 0} ms</span></div>
       <div class="console">${lines || '<div><span class="ln"></span><span style="color:var(--faint)">(program produced no output)</span></div>'}
       ${rt ? `<div><span class="ln">!</span><span class="rt">runtime error at ${rt.line}:${rt.col}: ${esc(rt.message)}</span></div>` : ""}</div>`;
   }
+
+  function renderBytecode(r, view) {
+    if (!r.bytecode) {
+      view.innerHTML = `<div class="empty"><span class="big">⚙</span>Bytecode is generated once the program compiles without errors.</div>`;
+      return;
+    }
+    const rows = r.bytecode.map((ins) => {
+      const src = ins.line ? `${ins.line}:${ins.col}` : "";
+      const attrs = ins.line ? ` data-line="${ins.line}" data-col="${ins.col}"` : ' class="scope-row"';
+      return `<tr${attrs}><td class="n">${ins.addr}</td>
+        <td><span class="op op-${OP_CLASS[ins.op] || "alu"}">${ins.op}</span></td>
+        <td>${esc(ins.arg)}</td><td class="cmt">${esc(ins.comment)}</td><td class="pos">${src}</td></tr>`;
+    }).join("");
+    const stats = r.vm
+      ? `<span class="chip">${r.vm.instructions_executed.toLocaleString()} executed</span><span class="chip">max stack ${r.vm.max_stack_depth}</span>`
+      : "";
+    view.innerHTML = `<div class="toolbar"><div class="summary">
+        <span class="chip">${r.bytecode.length} instructions</span>
+        <span class="chip">${r.stats.symbols} slot${r.stats.symbols === 1 ? "" : "s"}</span>${stats}
+      </div>
+      <div class="legend"><span class="l-stmt">stack</span><span class="l-expr">arithmetic / compare</span><span class="l-jump">control flow</span><span class="l-literal">I/O</span></div></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Addr</th><th>Opcode</th><th>Operand</th><th>Comment</th><th>Source</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>`;
+  }
+
+  $("outputView").addEventListener("click", (e) => {
+    const tr = e.target.closest("tr[data-line]");
+    if (tr) selectAt(+tr.dataset.line, +tr.dataset.col);
+  });
+  $("outSeg").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-view]");
+    if (!b) return;
+    state.outView = b.dataset.view;
+    $("outSeg").querySelectorAll("button").forEach((x) => x.classList.toggle("active", x === b));
+    renderOutput();
+  });
+  $("engineSelect").addEventListener("change", (e) => {
+    state.engine = e.target.value;
+    compile();
+  });
 
   // ---- tabs ----
   $("tabs").addEventListener("click", (e) => {
